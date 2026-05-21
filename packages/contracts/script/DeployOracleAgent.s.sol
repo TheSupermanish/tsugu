@@ -16,9 +16,7 @@ contract DeployOracleAgent is Script {
     function run() external {
         uint256 pk = vm.envUint("PRIVATE_KEY");
 
-        address platform = vm.envOr(
-            "SOMNIA_AGENTS_PLATFORM", address(0x037Bb9C718F3f7fe5eCBDB0b600D607b52706776)
-        );
+        address platform = vm.envOr("SOMNIA_AGENTS_PLATFORM", address(0x037Bb9C718F3f7fe5eCBDB0b600D607b52706776));
         uint256 agentId = vm.envOr("JSON_API_AGENT_ID", uint256(13174292974160097713));
         uint256 subSize = vm.envOr("SUBCOMMITTEE_SIZE", uint256(3));
         uint256 perAgentReward = vm.envOr("PER_AGENT_REWARD_WEI", uint256(0.03 ether));
