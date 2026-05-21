@@ -1,13 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {
-    IAgentRequester,
-    IJsonApiAgent,
-    Response,
-    Request,
-    ResponseStatus
-} from "./lib/SomniaAgents.sol";
+import {IAgentRequester, IJsonApiAgent, Response, Request, ResponseStatus} from "./lib/SomniaAgents.sol";
 
 /// @title  OracleAgent — asom's day-1 Somnia Agents wrapper
 /// @notice Fetches a uint256 price from any HTTPS JSON endpoint via the
@@ -24,8 +18,15 @@ contract OracleAgent {
     uint256 public immutable subcommitteeSize;
     uint256 public immutable perAgentReward;
 
+    /// @notice Immutable. If the deployer's key is lost, all funds in the contract
+    ///         are unrecoverable. Day-1 hackathon scope — ownership will move to
+    ///         AgentNFT.ownerOf(tokenId) once the ERC-6551 layer ships.
     address public immutable owner;
 
+    /// @notice Last consensus-verified price, in `decimals`-fixed-point units.
+    /// @dev    Consumers MUST also read `lastUpdated` and check freshness against
+    ///         `block.timestamp`. A bare `latestPrice()` read with no staleness
+    ///         guard can return a value that is hours/days old.
     uint256 public latestPrice;
     uint256 public lastUpdated;
     uint256 public lastRequestId;
@@ -48,13 +49,9 @@ contract OracleAgent {
     error NotPlatform(address caller);
     error UnknownRequest(uint256 requestId);
     error NotOwner();
+    error EmptySuccessResponse(uint256 requestId);
 
-    constructor(
-        address platform_,
-        uint256 jsonApiAgentId_,
-        uint256 subcommitteeSize_,
-        uint256 perAgentReward_
-    ) {
+    constructor(address platform_, uint256 jsonApiAgentId_, uint256 subcommitteeSize_, uint256 perAgentReward_) {
         platform = IAgentRequester(platform_);
         jsonApiAgentId = jsonApiAgentId_;
         subcommitteeSize = subcommitteeSize_;
@@ -72,16 +69,15 @@ contract OracleAgent {
     /// @notice Convenience: fetch BTC price from CoinGecko via the JSON API agent.
     function requestBitcoinPrice() external payable returns (uint256 requestId) {
         return requestUintFromJson(
-            "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd",
-            "bitcoin.usd",
-            8
+            "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd", "bitcoin.usd", 8
         );
     }
 
     /// @notice Generic JSON fetch — any URL, any dot-path, any decimals.
-    /// @dev    Funded internally: the caller does not need to forward msg.value
-    ///         as long as the contract holds at least requiredDeposit() in STT.
-    ///         Pass msg.value to top up alongside the request if desired.
+    /// @dev    Caller-pays model: non-owners MUST forward msg.value >= requiredDeposit().
+    ///         Owner may pay from the contract's accumulated balance (rebates,
+    ///         prior top-ups) without forwarding value. This prevents anyone
+    ///         from draining the contract by spamming requests with msg.value=0.
     function requestUintFromJson(string memory url, string memory jsonPath, uint8 decimals)
         public
         payable
@@ -90,13 +86,17 @@ contract OracleAgent {
         if (msg.value > 0) emit Funded(msg.sender, msg.value);
 
         uint256 deposit = requiredDeposit();
+
+        // Non-owners must fund their own request — prevents DoS and arbitrary-URL
+        // attacks against the contract's working capital.
+        if (msg.sender != owner && msg.value < deposit) {
+            revert InsufficientDeposit(msg.value, deposit);
+        }
         if (address(this).balance < deposit) {
             revert InsufficientDeposit(address(this).balance, deposit);
         }
 
-        bytes memory payload = abi.encodeWithSelector(
-            IJsonApiAgent.fetchUint.selector, url, jsonPath, decimals
-        );
+        bytes memory payload = abi.encodeWithSelector(IJsonApiAgent.fetchUint.selector, url, jsonPath, decimals);
 
         requestId = platform.createRequest{value: deposit}(
             jsonApiAgentId, address(this), this.handleResponse.selector, payload
@@ -116,13 +116,20 @@ contract OracleAgent {
         Response[] memory responses,
         ResponseStatus status,
         Request memory /* details */
-    ) external {
+    )
+        external
+    {
         if (msg.sender != address(platform)) revert NotPlatform(msg.sender);
         if (!pendingRequests[requestId]) revert UnknownRequest(requestId);
 
         delete pendingRequests[requestId];
 
-        if (status == ResponseStatus.Success && responses.length > 0) {
+        if (status == ResponseStatus.Success) {
+            // Defensive: a Success status with zero responses is structurally
+            // contradictory. Fail loud rather than emit RequestFailed(_, Success)
+            // (which would confuse off-chain indexers branching on the event).
+            if (responses.length == 0) revert EmptySuccessResponse(requestId);
+
             uint256 price = abi.decode(responses[0].result, (uint256));
             latestPrice = price;
             lastUpdated = block.timestamp;

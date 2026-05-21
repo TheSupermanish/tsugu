@@ -29,12 +29,11 @@ contract MockAgentPlatform is IAgentRequester {
         return FLOOR;
     }
 
-    function createRequest(
-        uint256 agentId,
-        address callbackAddress,
-        bytes4 callbackSelector,
-        bytes calldata payload
-    ) external payable returns (uint256 requestId) {
+    function createRequest(uint256 agentId, address callbackAddress, bytes4 callbackSelector, bytes calldata payload)
+        external
+        payable
+        returns (uint256 requestId)
+    {
         requestId = nextRequestId++;
         lastRequestId = requestId;
         lastValue = msg.value;
@@ -45,12 +44,7 @@ contract MockAgentPlatform is IAgentRequester {
     }
 
     /// @notice Tests use this to simulate the platform invoking the callback.
-    function fireCallback(
-        address target,
-        uint256 requestId,
-        ResponseStatus status,
-        uint256 priceResult
-    ) external {
+    function fireCallback(address target, uint256 requestId, ResponseStatus status, uint256 priceResult) external {
         Response[] memory responses = new Response[](status == ResponseStatus.Success ? 1 : 0);
         if (status == ResponseStatus.Success) {
             responses[0] = Response({
@@ -62,15 +56,26 @@ contract MockAgentPlatform is IAgentRequester {
                 executionCost: 0.03 ether
             });
         }
+        _deliverCallback(target, requestId, responses, status);
+    }
+
+    /// @notice Tests use this to simulate edge-case callbacks (e.g. Success+empty).
+    function fireRawCallback(address target, uint256 requestId, Response[] memory responses, ResponseStatus status)
+        external
+    {
+        _deliverCallback(target, requestId, responses, status);
+    }
+
+    function _deliverCallback(address target, uint256 requestId, Response[] memory responses, ResponseStatus status)
+        internal
+    {
         Request memory details;
         details.id = requestId;
         details.status = status;
         details.consensusType = ConsensusType.Majority;
 
         (bool ok, bytes memory ret) = target.call(
-            abi.encodeWithSelector(
-                OracleAgent.handleResponse.selector, requestId, responses, status, details
-            )
+            abi.encodeWithSelector(OracleAgent.handleResponse.selector, requestId, responses, status, details)
         );
         if (!ok) {
             assembly {
@@ -100,9 +105,7 @@ contract OracleAgentTest is Test {
 
     function setUp() public {
         platform = new MockAgentPlatform();
-        oracle = new OracleAgent(
-            address(platform), JSON_API_AGENT_ID, SUBCOMMITTEE_SIZE, PER_AGENT_REWARD
-        );
+        oracle = new OracleAgent(address(platform), JSON_API_AGENT_ID, SUBCOMMITTEE_SIZE, PER_AGENT_REWARD);
     }
 
     function _fund(uint256 amount) internal {
@@ -120,11 +123,7 @@ contract OracleAgentTest is Test {
     }
 
     function test_request_revertsWhenContractUnderfunded() public {
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                OracleAgent.InsufficientDeposit.selector, 0, oracle.requiredDeposit()
-            )
-        );
+        vm.expectRevert(abi.encodeWithSelector(OracleAgent.InsufficientDeposit.selector, 0, oracle.requiredDeposit()));
         oracle.requestBitcoinPrice();
     }
 
@@ -134,9 +133,7 @@ contract OracleAgentTest is Test {
         assertEq(platform.lastValue(), oracle.requiredDeposit(), "deposit forwarded");
         assertEq(platform.lastAgentId(), JSON_API_AGENT_ID, "JSON API agent ID");
         assertEq(platform.lastCallback(), address(oracle), "callback addr");
-        assertEq(
-            platform.lastSelector(), OracleAgent.handleResponse.selector, "callback selector"
-        );
+        assertEq(platform.lastSelector(), OracleAgent.handleResponse.selector, "callback selector");
     }
 
     function test_request_marksRequestPending() public {
@@ -150,9 +147,7 @@ contract OracleAgentTest is Test {
         _fund(1 ether);
         vm.expectEmit(false, false, false, true, address(oracle));
         emit PriceRequested(
-            1,
-            "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd",
-            "bitcoin.usd"
+            1, "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd", "bitcoin.usd"
         );
         oracle.requestBitcoinPrice();
     }
@@ -270,6 +265,53 @@ contract OracleAgentTest is Test {
         uint256 before = sink.balance;
         oracle.withdraw(sink, 0.4 ether);
         assertEq(sink.balance - before, 0.4 ether);
+    }
+
+    // ---------------------------------------------------------------------
+    // Caller-pays / access-control (review-hardening)
+    // ---------------------------------------------------------------------
+
+    function test_request_revertsForNonOwnerWithoutMsgValue() public {
+        _fund(1 ether); // contract has plenty of balance, but non-owner can't tap it
+        uint256 deposit = oracle.requiredDeposit();
+        vm.prank(stranger);
+        vm.expectRevert(abi.encodeWithSelector(OracleAgent.InsufficientDeposit.selector, 0, deposit));
+        oracle.requestBitcoinPrice();
+    }
+
+    function test_request_revertsForNonOwnerWithPartialMsgValue() public {
+        _fund(1 ether);
+        uint256 deposit = oracle.requiredDeposit();
+        uint256 underpaid = deposit - 1;
+        vm.deal(stranger, 1 ether);
+        vm.prank(stranger);
+        vm.expectRevert(abi.encodeWithSelector(OracleAgent.InsufficientDeposit.selector, underpaid, deposit));
+        oracle.requestBitcoinPrice{value: underpaid}();
+    }
+
+    function test_request_acceptsCallerPaysForNonOwner() public {
+        uint256 deposit = oracle.requiredDeposit();
+        vm.deal(stranger, 1 ether);
+        vm.prank(stranger);
+        uint256 id = oracle.requestBitcoinPrice{value: deposit}();
+        assertTrue(oracle.pendingRequests(id), "should be pending");
+        assertEq(platform.lastValue(), deposit, "exact deposit forwarded");
+    }
+
+    function test_request_ownerCanStillUseContractBalance() public {
+        _fund(1 ether);
+        // owner is address(this) (the test contract) — calls with msg.value=0
+        uint256 id = oracle.requestBitcoinPrice();
+        assertTrue(oracle.pendingRequests(id), "owner request landed");
+        assertEq(platform.lastValue(), oracle.requiredDeposit(), "platform got deposit");
+    }
+
+    function test_callback_revertsOnSuccessWithEmptyResponses() public {
+        _fund(1 ether);
+        uint256 id = oracle.requestBitcoinPrice();
+        Response[] memory empty = new Response[](0);
+        vm.expectRevert(abi.encodeWithSelector(OracleAgent.EmptySuccessResponse.selector, id));
+        platform.fireRawCallback(address(oracle), id, empty, ResponseStatus.Success);
     }
 
     receive() external payable {}

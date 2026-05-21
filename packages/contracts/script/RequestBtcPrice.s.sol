@@ -16,13 +16,14 @@ contract RequestBtcPrice is Script {
         console2.log("== asom :: RequestBtcPrice ==");
         console2.log("oracle         ", oracleAddr);
         console2.log("balance        ", oracleAddr.balance);
-        console2.log("required       ", oracle.requiredDeposit());
+        // NB: oracle.requiredDeposit() staticcalls the Somnia Agents platform,
+        //     which is precompile-backed and unresolvable in forge's local
+        //     simulator. Read it off-chain via `cast call` if you need it.
 
         vm.startBroadcast(pk);
         uint256 requestId = oracle.requestBitcoinPrice();
         vm.stopBroadcast();
 
         console2.log("requestId      ", requestId);
-        console2.log("lastRequestId  ", oracle.lastRequestId());
     }
 }
