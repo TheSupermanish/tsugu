@@ -1,57 +1,59 @@
 # @asom/cli
 
-The `asom` command-line tool. Create and operate **self-sovereign agents** on Somnia — each agent gets a name, its own keypair, and an ERC-6551 wallet.
+The `asom` command-line tool. Create and operate agents on Somnia — every agent gets a name and an ERC-6551 wallet, **owned by you**.
 
 ```bash
 npm i -g @asom/cli
-export PRIVATE_KEY=0x...         # your funded Somnia key — only needed for writes
 
-asom create neo                  # generate neo's key + mint its NFT + wallet
-asom resolve neo                 # look up an agent (no key needed)
-asom available trinity           # is a name free?
-asom ls                          # agents you own locally
-asom fund neo --gas 0.01         # top up an agent's owner key / wallet
-asom whoami                      # your funding address
+asom login              # import your Somnia key once → encrypted keystore
+asom create neo         # name + wallet, owned by your key
+asom resolve neo        # look up any agent (no key needed)
+asom ls                 # agents you own
+asom fund neo --wallet 0.05
 ```
+
+## Keys: encrypted, non-custodial
+
+asom never holds your key. You import it **once** into a password-encrypted keystore on your own machine (scrypt + AES-256-GCM, same idea as `cast wallet`). The plaintext key never lands on disk, never leaves your machine, and asom has no server.
+
+```bash
+asom login           # paste key (hidden) + set a password → ~/.asom/keystore.json
+asom key address     # show your address (no password)
+asom key export      # reveal the key after password — for backup / import elsewhere
+asom logout          # delete the keystore from this machine
+```
+
+Writes (`create`, `fund`) ask for your password to unlock the key, sign locally, and send only the signed transaction. Set `ASOM_PASSWORD` to skip the prompt in scripts, or `PRIVATE_KEY` to bypass the keystore entirely (quick testnet runs — your risk).
 
 ## `asom create <name>`
 
-Generates a **fresh keypair for the agent**, registers the NFT to that address (so the agent **owns itself**), deploys its ERC-6551 wallet, seeds the wallet, and funds the agent's owner key with gas — so it can act on its own.
+Registers the name, deploys the agent's ERC-6551 wallet, and seeds it — all owned by your key. Reads don't need a key; this does.
 
 ```bash
-asom create neo                       # defaults: --seed 0.02 (wallet), --gas 0.005 (owner key)
-asom create neo --seed 0.05 --gas 0.01
+asom create neo                 # --seed defaults to 0.02 STT
+asom create neo --seed 0.1
 ```
 
-The agent's private key is saved to `~/.asom/agents/neo.json` (chmod 600).
-
 ```
-  neo@asom   self-sovereign agent
+  ✨ neo@asom is live.
 
-  token    #1
-  wallet   0x3Ec0397677a61121CAe3b503835EDd3bB76061d3   ← ERC-6551 account (a contract)
-  owner    0x60d7…                                         ← neo's own key, controls the wallet
-  balance  0.0200 STT
-  🔑 key   ~/.asom/agents/neo.json
-  ⛽ gas    0.005 STT → owner (can act now)
+   neo@asom
+
+  token     #1
+  wallet    0x3Ec0…           ← the agent's ERC-6551 account (holds its funds)
+  owner     0x875e…           ← your address (you control it)
+  balance   0.0200 STT
+  📜 tx     https://shannon-explorer.somnia.network/tx/…
 ```
 
-## Two pockets, one agent
+The agent's wallet is its own address (receives payments, holds its balance), but **you** control it via your key. Each agent's funds stay separate; one owner. `asom fund <name> --wallet <stt>` tops up an agent's wallet later.
 
-| Thing | What it is | Funded by |
-|---|---|---|
-| **wallet** (TBA) | the agent's ERC-6551 account — what it holds/spends | `--seed` |
-| **owner key** | the EOA that *signs* for the agent (controls the wallet) | `--gas` |
+## Config
 
-`asom fund <name> --gas <stt> --wallet <stt>` tops up either pocket later.
+| Env var | Purpose |
+|---|---|
+| `ASOM_PASSWORD` | Unlock the keystore non-interactively (scripts/CI) |
+| `PRIVATE_KEY` | Bypass the keystore (plaintext, testnet shortcut) |
+| `SHANNON_RPC_URL` | RPC override |
 
-## Bring your own key
-
-The funding wallet (pays gas to create agents) is **yours** — set `PRIVATE_KEY` in your env or a `.env` file. The CLI never stores it. Out of STT? It points you at the faucet. Per-agent keys *are* stored, under `~/.asom/agents/` (plaintext, chmod 600 — testnet only; encryption before mainnet).
-
-| Env var | Purpose | Required |
-|---|---|---|
-| `PRIVATE_KEY` | Your funding signer (writes: `create`, `fund`) | writes only |
-| `SHANNON_RPC_URL` | RPC override | no |
-
-Built on [`@asom/sdk`](../sdk).
+No STT to pay gas? The CLI points you at the faucet. Built on [`@asom/sdk`](../sdk).
