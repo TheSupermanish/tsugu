@@ -148,4 +148,19 @@ describe("TsuguClient integration (anvil)", () => {
     const agent = await c.createAgent("oracle", { owner: other as Address });
     expect(agent.owner).toBe(getAddress(other));
   });
+
+  it("send() transfers native value to a recipient", async () => {
+    const c = client();
+    const to = "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC" as Address; // anvil acct #2
+    const before = await c.getBalance(to);
+    await c.send(to, "0.1");
+    expect((await c.getBalance(to)) - before).toBe(parseEther("0.1"));
+  });
+
+  it("send() without a key throws", async () => {
+    const c = client(false);
+    await expect(c.send("0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC" as Address, "0.1")).rejects.toThrow(
+      /requires a privateKey/,
+    );
+  });
 });
