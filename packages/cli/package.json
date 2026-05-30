@@ -1,6 +1,6 @@
 {
   "name": "@asom/cli",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "asom command-line tool — create and operate agents on Somnia",
   "license": "MIT",
   "author": "Wono Labs",
@@ -32,7 +32,8 @@
     "@asom/sdk": "workspace:*",
     "commander": "^12.1.0",
     "dotenv": "^16.4.5",
-    "picocolors": "^1.1.0"
+    "picocolors": "^1.1.0",
+    "viem": "^2.21.0"
   },
   "devDependencies": {
     "@types/node": "^22.7.0",

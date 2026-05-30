@@ -1,6 +1,6 @@
 {
   "name": "@asom/sdk",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "TypeScript SDK for asom — create, resolve, and operate agents on Somnia",
   "license": "MIT",
   "author": "Wono Labs",
