@@ -36,10 +36,10 @@ interface KeystoreFile {
 const SCRYPT_N = 1 << 15; // 32768
 const SCRYPT_R = 8;
 const SCRYPT_P = 1;
-const MAXMEM = 128 * SCRYPT_N * SCRYPT_R * 2; // headroom for scrypt
+const SCRYPT_N_FLOOR = 1 << 14; // reject keystores weakened below this on load
 
-function deriveKey(password: string, salt: Buffer): Buffer {
-  return scryptSync(password, salt, 32, { N: SCRYPT_N, r: SCRYPT_R, p: SCRYPT_P, maxmem: MAXMEM });
+function deriveKey(password: string, salt: Buffer, n: number, r: number, p: number): Buffer {
+  return scryptSync(password, salt, 32, { N: n, r, p, maxmem: 128 * n * r * 2 });
 }
 
 export function hasKeystore(): boolean {
@@ -59,7 +59,7 @@ export function saveKeystore(privateKey: Hex, password: string): Address {
   const address = privateKeyToAccount(privateKey).address;
   const salt = randomBytes(16);
   const iv = randomBytes(12);
-  const key = deriveKey(password, salt);
+  const key = deriveKey(password, salt, SCRYPT_N, SCRYPT_R, SCRYPT_P);
   const cipher = createCipheriv("aes-256-gcm", key, iv);
   const ciphertext = Buffer.concat([cipher.update(privateKey, "utf8"), cipher.final()]);
   const tag = cipher.getAuthTag();
@@ -82,17 +82,35 @@ export function saveKeystore(privateKey: Hex, password: string): Address {
   return address;
 }
 
-/** Decrypt the keystore. Throws "wrong password" if the password is incorrect. */
+/** Decrypt the keystore. Throws "wrong password" on a bad password, or
+ *  "corrupt keystore" if the file's fields are tampered/malformed. */
 export function loadKeystore(password: string): Hex {
   const file = JSON.parse(readFileSync(KEYSTORE_PATH, "utf8")) as KeystoreFile;
-  const key = deriveKey(password, Buffer.from(file.salt, "hex"));
-  const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(file.iv, "hex"));
-  decipher.setAuthTag(Buffer.from(file.tag, "hex"));
+  const salt = Buffer.from(file.salt, "hex");
+  const iv = Buffer.from(file.iv, "hex");
+  const tag = Buffer.from(file.tag, "hex");
+
+  // Validate field shapes before trusting them. A short/forged GCM tag would
+  // weaken integrity, and a downgraded scrypt N would weaken brute-force
+  // resistance — the keystore is a plaintext file, so don't trust it blindly.
+  if (salt.length !== 16 || iv.length !== 12 || tag.length !== 16) {
+    throw new Error("corrupt keystore (bad salt/iv/tag length)");
+  }
+  if (
+    file.kdf !== "scrypt" ||
+    !(file.n >= SCRYPT_N_FLOOR) ||
+    !(file.r >= 1 && file.r <= 32) ||
+    !(file.p >= 1 && file.p <= 16)
+  ) {
+    throw new Error("corrupt keystore (unsupported or weakened KDF params)");
+  }
+
+  // Use the file's own params so future N bumps stay readable.
+  const key = deriveKey(password, salt, file.n, file.r, file.p);
+  const decipher = createDecipheriv("aes-256-gcm", key, iv);
+  decipher.setAuthTag(tag);
   try {
-    const plaintext = Buffer.concat([
-      decipher.update(Buffer.from(file.ciphertext, "hex")),
-      decipher.final(),
-    ]);
+    const plaintext = Buffer.concat([decipher.update(Buffer.from(file.ciphertext, "hex")), decipher.final()]);
     return plaintext.toString("utf8") as Hex;
   } catch {
     throw new Error("wrong password");
@@ -103,12 +121,14 @@ export function removeKeystore(): void {
   if (hasKeystore()) rmSync(KEYSTORE_PATH);
 }
 
-/** Prompt for input; `hidden` masks it (passwords). Uses the `prompts` library
- *  for correct TTY masking and Ctrl-C handling. Exits cleanly if cancelled. */
-export async function prompt(question: string, hidden = false): Promise<string> {
+/** Prompt for input; `hidden` masks it. `trim` defaults true, but pass false for
+ *  secrets — trimming a password silently changes it and can lock you out of a
+ *  keystore restored elsewhere. Uses `prompts` for TTY masking + Ctrl-C handling. */
+export async function prompt(question: string, hidden = false, trim = true): Promise<string> {
   const { value } = await prompts(
     { type: hidden ? "password" : "text", name: "value", message: question.trim() },
     { onCancel: () => process.exit(1) },
   );
-  return String(value ?? "").trim();
+  const s = String(value ?? "");
+  return trim ? s.trim() : s;
 }

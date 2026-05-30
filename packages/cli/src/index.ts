@@ -48,6 +48,10 @@ program
 async function getKey(): Promise<`0x${string}`> {
   const fromEnv = process.env.PRIVATE_KEY as `0x${string}` | undefined;
   if (fromEnv) {
+    if (!/^0x[0-9a-fA-F]{64}$/.test(fromEnv)) {
+      console.error(bad("  ✗ PRIVATE_KEY is set but not a valid 0x-prefixed 32-byte key."));
+      process.exit(1);
+    }
     console.error(
       muted("  ⚠ using a plaintext PRIVATE_KEY — fine for testnet. For an encrypted wallet: ") +
         accent("tsugu login"),
@@ -56,11 +60,13 @@ async function getKey(): Promise<`0x${string}`> {
   }
 
   if (hasKeystore()) {
-    const pw = process.env.TSUGU_PASSWORD ?? (await prompt("  password: ", true));
+    const envPw = process.env.TSUGU_PASSWORD;
+    if (envPw) console.error(muted("  ⚠ using TSUGU_PASSWORD from env — for automation only (it's visible to child processes)."));
+    const pw = envPw ?? (await prompt("  password: ", true, false));
     try {
       return loadKeystore(pw);
-    } catch {
-      console.error(bad("  ✗ wrong password."));
+    } catch (e) {
+      console.error(bad(`  ✗ ${(e as Error).message}.`));
       process.exit(1);
     }
   }
@@ -144,8 +150,8 @@ program
       key = generatePrivateKey(); // generated locally, on your machine — never sent anywhere
     }
 
-    const pw = await prompt("  set a password: ", true);
-    const pw2 = await prompt("  confirm password: ", true);
+    const pw = await prompt("  set a password: ", true, false);
+    const pw2 = await prompt("  confirm password: ", true, false);
     if (pw !== pw2) {
       console.error(bad("  ✗ Passwords don't match."));
       process.exit(1);
@@ -179,12 +185,12 @@ key
       console.error(bad("  ✗ No keystore. Run: tsugu login"));
       process.exit(1);
     }
-    const pw = await prompt("  password: ", true);
+    const pw = await prompt("  password: ", true, false);
     let pk: string;
     try {
       pk = loadKeystore(pw);
-    } catch {
-      console.error(bad("  ✗ wrong password."));
+    } catch (e) {
+      console.error(bad(`  ✗ ${(e as Error).message}.`));
       process.exit(1);
     }
     console.log(warn("  ⚠ Anyone with this key controls your wallet. Don't share or paste it anywhere."));
