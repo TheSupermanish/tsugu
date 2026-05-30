@@ -17,8 +17,10 @@ export interface AgentFile {
   name: string;
   /** ERC-6551 token-bound account — the agent's on-chain wallet (a contract). */
   account: Address;
-  /** NFT owner = who controls the agent. Your address (you own everything). */
+  /** NFT owner = who controls the agent (the agent's own derived address in HD mode). */
   owner: Address;
+  /** BIP-44 address index this agent's key is derived from (HD mode). Null in single-key mode. */
+  index: number | null;
   tokenId: string;
   chainId: number;
   createdAt: string;
@@ -41,6 +43,15 @@ export function readAgent(name: string): AgentFile | null {
   } catch {
     return null;
   }
+}
+
+/** Next free HD address index for a new agent. Index 0 is the funding account,
+ *  so agents start at 1. Uses max(existing)+1 so deleting a record won't reuse. */
+export function nextAgentIndex(): number {
+  const used = listAgents()
+    .map((a) => a.index)
+    .filter((i): i is number => typeof i === "number");
+  return used.length === 0 ? 1 : Math.max(...used) + 1;
 }
 
 export function listAgents(): AgentFile[] {

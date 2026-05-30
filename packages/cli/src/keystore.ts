@@ -3,16 +3,18 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "node:crypto";
 import prompts from "prompts";
-import { privateKeyToAccount } from "viem/accounts";
-import type { Address } from "viem";
+import { english, generateMnemonic, mnemonicToAccount } from "viem/accounts";
+import { toHex, type Address } from "viem";
 
 /**
- * Encrypted, non-custodial key store for the tsugu CLI.
+ * Encrypted, non-custodial HD keychain for the tsugu CLI.
  *
- * Your private key is encrypted with a password you choose (scrypt → AES-256-GCM)
- * and written to ~/.tsugu/keystore.json. The plaintext key never touches disk and
- * is never sent anywhere — this runs entirely on your machine. Wrong password =
- * the GCM auth check fails and decryption throws. Same pattern as `cast wallet`.
+ * One BIP-39 seed (12 words) is encrypted with your password (scrypt → AES-256-GCM)
+ * at ~/.tsugu/keystore.json. Every account is derived from it (BIP-44 m/44'/60'/0'/0/i):
+ *   - index 0  = your funding account (pays gas to create agents)
+ *   - index 1+ = each agent's own self-sovereign key
+ * The plaintext seed never touches disk and is never sent anywhere — everything
+ * runs on your machine. Back up the 12 words once and every agent is recoverable.
  */
 
 export const TSUGU_HOME = process.env.TSUGU_HOME || join(homedir(), ".tsugu");
@@ -21,7 +23,8 @@ const KEYSTORE_PATH = join(TSUGU_HOME, "keystore.json");
 type Hex = `0x${string}`;
 
 interface KeystoreFile {
-  version: 1;
+  version: 2;
+  type: "hd-mnemonic";
   kdf: "scrypt";
   n: number;
   r: number;
@@ -30,6 +33,7 @@ interface KeystoreFile {
   iv: string;
   tag: string;
   ciphertext: string;
+  /** index-0 address, public, so whoami/address work without unlocking. */
   address: Address;
 }
 
@@ -38,15 +42,41 @@ const SCRYPT_R = 8;
 const SCRYPT_P = 1;
 const SCRYPT_N_FLOOR = 1 << 14; // reject keystores weakened below this on load
 
-function deriveKey(password: string, salt: Buffer, n: number, r: number, p: number): Buffer {
+function deriveScryptKey(password: string, salt: Buffer, n: number, r: number, p: number): Buffer {
   return scryptSync(password, salt, 32, { N: n, r, p, maxmem: 128 * n * r * 2 });
 }
+
+// --- HD derivation ---------------------------------------------------------
+
+export function newMnemonic(): string {
+  return generateMnemonic(english);
+}
+
+export function isValidMnemonic(mnemonic: string): boolean {
+  try {
+    mnemonicToAccount(mnemonic);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Derive the account at a BIP-44 address index from the seed. */
+export function deriveAccount(mnemonic: string, index: number): { privateKey: Hex; address: Address } {
+  const account = mnemonicToAccount(mnemonic, { addressIndex: index });
+  const pk = account.getHdKey().privateKey;
+  if (!pk) throw new Error("failed to derive private key");
+  return { privateKey: toHex(pk), address: account.address };
+}
+
+// --- keystore (encrypt the seed) -------------------------------------------
 
 export function hasKeystore(): boolean {
   return existsSync(KEYSTORE_PATH);
 }
 
-export function keystoreAddress(): Address | null {
+/** Index-0 address, readable without the password (it's public metadata). */
+export function operatorAddress(): Address | null {
   if (!hasKeystore()) return null;
   try {
     return (JSON.parse(readFileSync(KEYSTORE_PATH, "utf8")) as KeystoreFile).address;
@@ -55,17 +85,18 @@ export function keystoreAddress(): Address | null {
   }
 }
 
-export function saveKeystore(privateKey: Hex, password: string): Address {
-  const address = privateKeyToAccount(privateKey).address;
+export function saveSeed(mnemonic: string, password: string): Address {
+  const address = deriveAccount(mnemonic, 0).address;
   const salt = randomBytes(16);
   const iv = randomBytes(12);
-  const key = deriveKey(password, salt, SCRYPT_N, SCRYPT_R, SCRYPT_P);
+  const key = deriveScryptKey(password, salt, SCRYPT_N, SCRYPT_R, SCRYPT_P);
   const cipher = createCipheriv("aes-256-gcm", key, iv);
-  const ciphertext = Buffer.concat([cipher.update(privateKey, "utf8"), cipher.final()]);
+  const ciphertext = Buffer.concat([cipher.update(mnemonic, "utf8"), cipher.final()]);
   const tag = cipher.getAuthTag();
 
   const file: KeystoreFile = {
-    version: 1,
+    version: 2,
+    type: "hd-mnemonic",
     kdf: "scrypt",
     n: SCRYPT_N,
     r: SCRYPT_R,
@@ -82,17 +113,16 @@ export function saveKeystore(privateKey: Hex, password: string): Address {
   return address;
 }
 
-/** Decrypt the keystore. Throws "wrong password" on a bad password, or
+/** Decrypt the seed. Throws "wrong password" on a bad password, or
  *  "corrupt keystore" if the file's fields are tampered/malformed. */
-export function loadKeystore(password: string): Hex {
+export function loadSeed(password: string): string {
   const file = JSON.parse(readFileSync(KEYSTORE_PATH, "utf8")) as KeystoreFile;
   const salt = Buffer.from(file.salt, "hex");
   const iv = Buffer.from(file.iv, "hex");
   const tag = Buffer.from(file.tag, "hex");
 
-  // Validate field shapes before trusting them. A short/forged GCM tag would
-  // weaken integrity, and a downgraded scrypt N would weaken brute-force
-  // resistance — the keystore is a plaintext file, so don't trust it blindly.
+  // Don't trust an on-disk file blindly: a short/forged GCM tag weakens integrity
+  // and a downgraded scrypt N weakens brute-force resistance.
   if (salt.length !== 16 || iv.length !== 12 || tag.length !== 16) {
     throw new Error("corrupt keystore (bad salt/iv/tag length)");
   }
@@ -105,13 +135,12 @@ export function loadKeystore(password: string): Hex {
     throw new Error("corrupt keystore (unsupported or weakened KDF params)");
   }
 
-  // Use the file's own params so future N bumps stay readable.
-  const key = deriveKey(password, salt, file.n, file.r, file.p);
+  const key = deriveScryptKey(password, salt, file.n, file.r, file.p);
   const decipher = createDecipheriv("aes-256-gcm", key, iv);
   decipher.setAuthTag(tag);
   try {
     const plaintext = Buffer.concat([decipher.update(Buffer.from(file.ciphertext, "hex")), decipher.final()]);
-    return plaintext.toString("utf8") as Hex;
+    return plaintext.toString("utf8");
   } catch {
     throw new Error("wrong password");
   }

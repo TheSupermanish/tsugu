@@ -1,17 +1,19 @@
 import { Command } from "commander";
 import pc from "picocolors";
 import { parseEther } from "viem";
-import { generatePrivateKey } from "viem/accounts";
 import { config as loadEnv } from "dotenv";
 import { TsuguClient, type Agent } from "@tsugu/sdk";
-import { saveAgent, readAgent, listAgents } from "./store.js";
+import { saveAgent, readAgent, listAgents, nextAgentIndex } from "./store.js";
 import {
   TSUGU_HOME,
   hasKeystore,
-  keystoreAddress,
-  saveKeystore,
-  loadKeystore,
+  operatorAddress,
+  saveSeed,
+  loadSeed,
   removeKeystore,
+  newMnemonic,
+  isValidMnemonic,
+  deriveAccount,
   prompt,
 } from "./keystore.js";
 
@@ -19,7 +21,6 @@ loadEnv();
 
 const FAUCET_URL = "https://cloud.google.com/application/web3/faucet/somnia/shannon";
 
-// --- palette ---------------------------------------------------------------
 const brand = (s: string) => pc.bold(pc.magenta(s));
 const accent = (s: string) => pc.cyan(s);
 const ok = (s: string) => pc.green(s);
@@ -36,35 +37,37 @@ function banner() {
 const program = new Command();
 program
   .name("tsugu")
-  .description("Create and operate agents on Somnia — every agent gets a name and a wallet.")
+  .description("Create and operate agents on Somnia — an HD keychain: one seed, a key per agent.")
   .version("0.0.2");
 
+type Hex = `0x${string}`;
+
 /**
- * Resolve the signing key, non-custodially:
- *   1. PRIVATE_KEY env  (testnet shortcut — your risk)
- *   2. encrypted keystore (tsugu login) — unlock with password (or TSUGU_PASSWORD)
- * Never stored by tsugu beyond the local encrypted file.
+ * Unlock a signer, non-custodially.
+ *   - PRIVATE_KEY env  → single-key mode (agents owned by that key; no derivation)
+ *   - encrypted seed   → HD mode: operator = index 0, agents = index 1+ (self-sovereign)
  */
-async function getKey(): Promise<`0x${string}`> {
-  const fromEnv = process.env.PRIVATE_KEY as `0x${string}` | undefined;
+async function unlock(): Promise<{ operatorKey: Hex; seed?: string }> {
+  const fromEnv = process.env.PRIVATE_KEY as Hex | undefined;
   if (fromEnv) {
     if (!/^0x[0-9a-fA-F]{64}$/.test(fromEnv)) {
       console.error(bad("  ✗ PRIVATE_KEY is set but not a valid 0x-prefixed 32-byte key."));
       process.exit(1);
     }
     console.error(
-      muted("  ⚠ using a plaintext PRIVATE_KEY — fine for testnet. For an encrypted wallet: ") +
+      muted("  ⚠ using a plaintext PRIVATE_KEY (single-key mode). For an HD keychain: ") +
         accent("tsugu login"),
     );
-    return fromEnv;
+    return { operatorKey: fromEnv };
   }
 
   if (hasKeystore()) {
     const envPw = process.env.TSUGU_PASSWORD;
-    if (envPw) console.error(muted("  ⚠ using TSUGU_PASSWORD from env — for automation only (it's visible to child processes)."));
+    if (envPw) console.error(muted("  ⚠ using TSUGU_PASSWORD from env — automation only (visible to child processes)."));
     const pw = envPw ?? (await prompt("  password: ", true, false));
     try {
-      return loadKeystore(pw);
+      const seed = loadSeed(pw);
+      return { operatorKey: deriveAccount(seed, 0).privateKey, seed };
     } catch (e) {
       console.error(bad(`  ✗ ${(e as Error).message}.`));
       process.exit(1);
@@ -72,15 +75,15 @@ async function getKey(): Promise<`0x${string}`> {
   }
 
   console.log("");
-  console.error(bad("  ✗ No key found."));
-  console.error(`    Import your funded Somnia key once: ${accent("tsugu login")}`);
+  console.error(bad("  ✗ No wallet set up."));
+  console.error(`    Create or import one once: ${accent("tsugu login")}`);
   console.error(muted(`    (or export PRIVATE_KEY=0x… for a quick testnet run)`));
   console.error(muted(`    No STT? Faucet → ${FAUCET_URL}`));
   console.log("");
   process.exit(1);
 }
 
-function client(key?: `0x${string}`): TsuguClient {
+function client(key?: Hex): TsuguClient {
   return new TsuguClient({ privateKey: key, rpcUrl: process.env.SHANNON_RPC_URL });
 }
 
@@ -97,11 +100,8 @@ async function assertFunded(c: TsuguClient, needStt: number, what: string): Prom
   console.log("");
   console.error(bad(`  ✗ Not enough STT to ${what}.`));
   console.error(`    ${accent(addr)} has ${warn(formatStt(bal))} STT, needs ~${needStt}.`);
-  if (c.chainId === 50312) {
-    console.error(`    Grab testnet STT → ${accent(FAUCET_URL)}`);
-  } else {
-    console.error(`    Send ${accent("SOMI")} to ${accent(addr)} to fund it.`);
-  }
+  if (c.chainId === 50312) console.error(`    Grab testnet STT → ${accent(FAUCET_URL)}`);
+  else console.error(`    Send ${accent("SOMI")} to ${accent(addr)} to fund it.`);
   console.log("");
   process.exit(1);
 }
@@ -119,35 +119,34 @@ function printAgent(c: TsuguClient, agent: Agent, balanceWei?: bigint) {
   console.log("");
 }
 
-// --- key management --------------------------------------------------------
+// --- wallet / keychain -----------------------------------------------------
 
 program
   .command("login")
-  .description("Set up your wallet: generate a new one or import an existing key (encrypted)")
-  .option("--import", "import an existing private key instead of generating a new wallet")
+  .description("Set up your HD wallet: generate a new seed or import an existing one (encrypted)")
+  .option("--import", "import an existing 12-word seed instead of generating one")
   .action(async (opts: { import?: boolean }) => {
     banner();
     if (hasKeystore()) {
-      const yes = await prompt(`  A wallet is already set up (${keystoreAddress()}). Replace it? [y/N] `);
+      const yes = await prompt(`  A wallet is already set up (${operatorAddress()}). Replace it? [y/N] `);
       if (yes.toLowerCase() !== "y") return;
     }
 
-    // Default = generate a fresh wallet. --import (or answering "i") brings your own.
     let mode = opts.import ? "import" : "new";
     if (!opts.import) {
-      const choice = await prompt("  [N]ew wallet or [i]mport existing key?  (N) ");
+      const choice = await prompt("  [N]ew seed or [i]mport existing?  (N) ");
       if (choice.toLowerCase().startsWith("i")) mode = "import";
     }
 
-    let key: `0x${string}`;
+    let mnemonic: string;
     if (mode === "import") {
-      key = (await prompt("  private key (0x…, hidden): ", true)) as `0x${string}`;
-      if (!/^0x[0-9a-fA-F]{64}$/.test(key)) {
-        console.error(bad("  ✗ Not a valid 0x-prefixed private key."));
+      mnemonic = await prompt("  12-word seed (hidden): ", true, false);
+      if (!isValidMnemonic(mnemonic)) {
+        console.error(bad("  ✗ Not a valid BIP-39 seed phrase."));
         process.exit(1);
       }
     } else {
-      key = generatePrivateKey(); // generated locally, on your machine — never sent anywhere
+      mnemonic = newMnemonic();
     }
 
     const pw = await prompt("  set a password: ", true, false);
@@ -161,96 +160,117 @@ program
       process.exit(1);
     }
 
-    const addr = saveKeystore(key, pw);
+    const addr = saveSeed(mnemonic, pw);
     console.log("");
-    console.log(ok(`  ✓ Wallet ${mode === "new" ? "created" : "imported"} and encrypted → ${TSUGU_HOME}/keystore.json`));
-    console.log(`  ${label("address")} ${accent(addr)}`);
+    console.log(ok(`  ✓ Seed ${mode === "new" ? "created" : "imported"} and encrypted → ${TSUGU_HOME}/keystore.json`));
     if (mode === "new") {
       console.log("");
-      console.log(muted("  This is a brand-new wallet with 0 STT. Fund it to create agents:"));
-      console.log(`  ${accent(FAUCET_URL)}`);
-      console.log(muted(`  Back it up any time with: tsugu key export`));
+      console.log(warn("  ⚠ Write these 12 words down. They recover every agent. tsugu can't restore them for you:"));
+      console.log("");
+      console.log(`    ${pc.bold(mnemonic)}`);
     }
-    console.log(muted("  Your key is encrypted on this machine. tsugu never sends or stores it anywhere."));
+    console.log("");
+    console.log(`  ${label("account")} ${accent(addr)} ${muted("(index 0 — funds agent creation)")}`);
+    if (mode === "new") {
+      console.log(muted("  New account, 0 STT. Fund it to create agents:"));
+      console.log(`  ${accent(FAUCET_URL)}`);
+    }
   });
 
-const key = program.command("key").description("Manage your encrypted key");
+const key = program.command("key").description("Manage your encrypted seed");
 
 key
   .command("export")
-  .description("Reveal your private key (after password) — for backup or import elsewhere")
+  .description("Reveal your 12-word seed (after password) — back it up safely")
   .action(async () => {
     banner();
     if (!hasKeystore()) {
-      console.error(bad("  ✗ No keystore. Run: tsugu login"));
+      console.error(bad("  ✗ No keystore. Run: tsugu login (or you're using PRIVATE_KEY, which has no seed)"));
       process.exit(1);
     }
     const pw = await prompt("  password: ", true, false);
-    let pk: string;
+    let seed: string;
     try {
-      pk = loadKeystore(pw);
+      seed = loadSeed(pw);
     } catch (e) {
       console.error(bad(`  ✗ ${(e as Error).message}.`));
       process.exit(1);
     }
-    console.log(warn("  ⚠ Anyone with this key controls your wallet. Don't share or paste it anywhere."));
+    console.log(warn("  ⚠ Anyone with these words controls every agent. Never share or paste them."));
     console.log("");
-    console.log(`  ${pk}`);
+    console.log(`  ${seed}`);
     console.log("");
   });
 
 key
   .command("address")
-  .description("Show your keystore address (no password needed)")
+  .description("Show your funding (index 0) address (no password needed)")
   .action(() => {
-    const addr = keystoreAddress();
+    const addr = operatorAddress();
     console.log(addr ? accent(addr) : muted("No keystore. Run: tsugu login"));
   });
 
 program
   .command("logout")
-  .description("Delete the encrypted keystore from this machine")
+  .description("Delete the encrypted seed from this machine")
   .action(async () => {
     if (!hasKeystore()) {
       console.log(muted("  Nothing to remove."));
       return;
     }
-    const yes = await prompt(`  Delete keystore for ${keystoreAddress()}? Make sure you exported it. [y/N] `);
+    const yes = await prompt(`  Delete the seed for ${operatorAddress()}? Make sure you exported it. [y/N] `);
     if (yes.toLowerCase() !== "y") return;
     removeKeystore();
-    console.log(ok("  ✓ Keystore removed."));
+    console.log(ok("  ✓ Seed removed."));
   });
 
 // --- agents ----------------------------------------------------------------
 
 program
   .command("create")
-  .description("Create an agent: a name + its own ERC-6551 wallet, owned by you")
+  .description("Create an agent: a name + its own ERC-6551 wallet, with its own derived key")
   .argument("<name>", "agent name (a-z, 0-9, hyphen; 1-32 chars)")
   .option("-s, --seed <stt>", "STT to seed the new agent wallet with", "0.02")
   .action(async (name: string, opts: { seed: string }) => {
     banner();
-    const c = client(await getKey());
+    const { operatorKey, seed } = await unlock();
+    const c = client(operatorKey);
     await assertFunded(c, parseFloat(opts.seed) + 0.05, `create ${name}@tsugu`);
 
     if (!(await c.isAvailable(name))) {
       console.error(bad(`  ✗ ${name}@tsugu is already taken.`));
       process.exit(1);
     }
+    if (readAgent(name)) {
+      console.error(bad(`  ✗ You already have a local agent named ${name}.`));
+      process.exit(1);
+    }
+
+    // HD mode: each agent gets its OWN key derived at the next index, and owns
+    // itself. Single-key mode (PRIVATE_KEY): owned by your one key.
+    let index: number | null = null;
+    let owner: `0x${string}` | undefined;
+    if (seed) {
+      index = nextAgentIndex();
+      owner = deriveAccount(seed, index).address;
+    }
+
     console.log(muted(`  spinning up ${name}@tsugu...`));
     try {
-      const agent = await c.createAgent(name, { seedStt: opts.seed }); // owner defaults to you
+      const agent = await c.createAgent(name, { owner, seedStt: opts.seed });
       saveAgent({
         name,
         account: agent.account,
         owner: agent.owner,
+        index,
         tokenId: agent.tokenId.toString(),
         chainId: c.chainId,
         createdAt: new Date().toISOString(),
       });
-      console.log(ok(`  ✨ ${pc.bold(name + "@tsugu")} is live.`));
+      console.log(ok(`  ✨ ${pc.bold(name + "@tsugu")} is live${seed ? " and owns itself" : ""}.`));
       printAgent(c, agent, await c.getBalance(agent.account));
-      console.log(`  ${label("📜 tx")} ${muted(c.explorer("tx", agent.txHash))}`);
+      if (index !== null) console.log(`  ${label("key")} ${muted(`derived from your seed at index ${index}`)}`);
+      console.log(`  ${label("tx")} ${muted(c.explorer("tx", agent.txHash))}`);
       console.log("");
     } catch (err) {
       console.error(bad("  ✗ create failed:"), (err as Error).message);
@@ -296,7 +316,8 @@ program
     console.log("");
     console.log(`  ${brand(`your agents (${agents.length})`)}`);
     for (const a of agents) {
-      console.log(`  ${accent("◆")} ${pc.bold(a.name + "@tsugu")} ${muted("#" + a.tokenId)}  ${muted(a.account)}`);
+      const idx = a.index !== null ? muted(` ·i${a.index}`) : "";
+      console.log(`  ${accent("◆")} ${pc.bold(a.name + "@tsugu")} ${muted("#" + a.tokenId)}${idx}  ${muted(a.account)}`);
     }
     console.log("");
   });
@@ -308,7 +329,8 @@ program
   .option("-w, --wallet <stt>", "STT to send to the agent wallet", "0.01")
   .action(async (name: string, opts: { wallet: string }) => {
     banner();
-    const c = client(await getKey());
+    const { operatorKey } = await unlock();
+    const c = client(operatorKey);
     let agent: Agent;
     try {
       agent = await c.resolve(name);
@@ -329,12 +351,12 @@ program
 
 program
   .command("whoami")
-  .description("Show your address (from keystore or PRIVATE_KEY)")
+  .description("Show your funding address (index 0, or PRIVATE_KEY)")
   .action(() => {
-    const envKey = process.env.PRIVATE_KEY as `0x${string}` | undefined;
-    if (envKey) return console.log(accent(client(envKey).signerAddress!) + muted("  (from PRIVATE_KEY)"));
-    const addr = keystoreAddress();
-    console.log(addr ? accent(addr) + muted("  (keystore)") : muted("No key. Run: tsugu login"));
+    const envKey = process.env.PRIVATE_KEY as Hex | undefined;
+    if (envKey) return console.log(accent(client(envKey).signerAddress!) + muted("  (PRIVATE_KEY)"));
+    const addr = operatorAddress();
+    console.log(addr ? accent(addr) + muted("  (seed · index 0)") : muted("No wallet. Run: tsugu login"));
   });
 
 program.parseAsync(process.argv);
