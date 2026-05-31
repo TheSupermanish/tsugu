@@ -163,4 +163,13 @@ describe("AsomClient integration (anvil)", () => {
       /requires a privateKey/,
     );
   });
+
+  it("agentCountOf reflects ownership (for free-index scanning)", async () => {
+    const c = client();
+    const fresh = "0x90F79bf6EB2c4f870365E785982E1f101E93b906" as Address; // anvil acct #3, owns nothing
+    expect(await c.agentCountOf(fresh)).toBe(0n);
+    const agent = await c.createAgent("indexer", { owner: fresh });
+    expect(agent.owner).toBe(getAddress(fresh));
+    expect(await c.agentCountOf(fresh)).toBe(1n);
+  });
 });

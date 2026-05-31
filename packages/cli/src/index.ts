@@ -3,7 +3,7 @@ import pc from "picocolors";
 import { parseEther } from "viem";
 import { config as loadEnv } from "dotenv";
 import { AsomClient, type Agent } from "@asom/sdk";
-import { saveAgent, readAgent, listAgents, nextAgentIndex } from "./store.js";
+import { saveAgent, readAgent, listAgents } from "./store.js";
 import {
   ASOM_HOME,
   hasKeystore,
@@ -85,6 +85,19 @@ async function unlock(): Promise<{ operatorKey: Hex; seed?: string }> {
 
 function client(key?: Hex): AsomClient {
   return new AsomClient({ privateKey: key, rpcUrl: process.env.SHANNON_RPC_URL });
+}
+
+/**
+ * First HD index (>=1) whose derived address owns no agent yet. Uses on-chain
+ * state, not local records, so it survives restoring from just the seed —
+ * never reuses an index and never derives a duplicate owner key.
+ */
+async function nextFreeIndex(c: AsomClient, seed: string): Promise<number> {
+  for (let i = 1; i <= 1000; i++) {
+    const { address } = deriveAccount(seed, i);
+    if ((await c.agentCountOf(address)) === 0n) return i;
+  }
+  throw new Error("no free HD index found below 1000");
 }
 
 function formatStt(wei: bigint): string {
@@ -251,7 +264,7 @@ program
     let index: number | null = null;
     let owner: `0x${string}` | undefined;
     if (seed) {
-      index = nextAgentIndex();
+      index = await nextFreeIndex(c, seed);
       owner = deriveAccount(seed, index).address;
     }
 

@@ -63,6 +63,13 @@ export const agentNftAbi = [
   },
   {
     type: "function",
+    name: "balanceOf",
+    stateMutability: "view",
+    inputs: [{ name: "owner", type: "address" }],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    type: "function",
     name: "nameOf",
     stateMutability: "view",
     inputs: [{ name: "", type: "uint256" }],

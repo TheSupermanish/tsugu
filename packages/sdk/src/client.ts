@@ -121,6 +121,17 @@ export class AsomClient {
     return this.publicClient.getBalance({ address: getAddress(address) });
   }
 
+  /** How many agent NFTs an address owns. Lets callers find a free HD index
+   *  from chain state alone (recoverable from the seed, unlike local records). */
+  async agentCountOf(owner: Address): Promise<bigint> {
+    return this.publicClient.readContract({
+      address: this.addresses.agentNFT,
+      abi: agentNftAbi,
+      functionName: "balanceOf",
+      args: [getAddress(owner)],
+    });
+  }
+
   /**
    * Create an agent: mint the NFT, deploy its ERC-6551 wallet, register the name.
    * @param name   the agent name (validated on-chain: a-z, 0-9, hyphen; 1-32 chars)

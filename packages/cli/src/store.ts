@@ -45,15 +45,6 @@ export function readAgent(name: string): AgentFile | null {
   }
 }
 
-/** Next free HD address index for a new agent. Index 0 is the funding account,
- *  so agents start at 1. Uses max(existing)+1 so deleting a record won't reuse. */
-export function nextAgentIndex(): number {
-  const used = listAgents()
-    .map((a) => a.index)
-    .filter((i): i is number => typeof i === "number");
-  return used.length === 0 ? 1 : Math.max(...used) + 1;
-}
-
 export function listAgents(): AgentFile[] {
   if (!existsSync(AGENTS_DIR)) return [];
   return readdirSync(AGENTS_DIR)
