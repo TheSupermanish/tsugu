@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {AgentNFT} from "./AgentNFT.sol";
 import {IERC6551Registry} from "../interfaces/IERC6551.sol";
 
@@ -13,7 +14,14 @@ import {IERC6551Registry} from "../interfaces/IERC6551.sol";
 ///         on-chain (lowercase a-z, 0-9, hyphen; 1-32 chars; no leading/trailing
 ///         or doubled hyphen) so the namespace can't be polluted with ambiguous
 ///         or homoglyph-style entries.
-contract AgentRegistry {
+///
+///         register() is `nonReentrant`: minting calls `_safeMint`, which invokes
+///         `onERC721Received` on a contract `owner`. Without the guard a malicious
+///         owner could re-enter register() during that callback — before the name
+///         record is written — and claim the SAME name twice, minting two agents
+///         that both believe they own one name. The guard closes that window (and
+///         the seed-transfer window) so one name maps to exactly one agent.
+contract AgentRegistry is ReentrancyGuard {
     AgentNFT public immutable nft;
     IERC6551Registry public immutable accountRegistry;
     address public immutable accountImplementation;
@@ -49,17 +57,29 @@ contract AgentRegistry {
     /// @dev    Payable — any STT sent is forwarded to the new agent wallet as seed funds.
     /// @return tokenId  the minted AgentNFT id
     /// @return account  the agent's ERC-6551 wallet address
-    function register(string calldata name, address owner) external payable returns (uint256 tokenId, address account) {
+    function register(string calldata name, address owner)
+        external
+        payable
+        nonReentrant
+        returns (uint256 tokenId, address account)
+    {
         _validateName(name);
         bytes32 nameHash = keccak256(bytes(name));
         if (_records[nameHash].exists) revert NameTaken(name);
+
+        // Effects before interactions: reserve the name immediately so any
+        // re-entry (defense-in-depth alongside nonReentrant) sees it as taken.
+        // tokenId/account are backfilled below once minted — `exists` is the
+        // only field the duplicate-name guard reads.
+        _records[nameHash].exists = true;
 
         tokenId = nft.mint(owner, name);
 
         account = accountRegistry.createAccount(accountImplementation, bytes32(0), block.chainid, address(nft), tokenId);
 
-        _records[nameHash] =
-            AgentRecord({tokenId: tokenId, account: account, createdAt: uint64(block.timestamp), exists: true});
+        _records[nameHash].tokenId = tokenId;
+        _records[nameHash].account = account;
+        _records[nameHash].createdAt = uint64(block.timestamp);
         nameHashOfToken[tokenId] = nameHash;
 
         // Seed the new wallet with any STT the caller forwarded.

@@ -2,23 +2,40 @@
 
 Solidity contracts for [tsugu](../../README.md) — the agentic layer on Somnia.
 
-## Day 1 status
+## Status
 
-`OracleAgent.sol` is live on Shannon. See [`DEPLOYMENTS.md`](./DEPLOYMENTS.md) for addresses and tx hashes.
+Live on Shannon: the identity layer (`<name>@tsugu` agents with ERC-6551 wallets,
+reentrancy-guarded) and `OracleAgent` (consensus-verified price oracle). See
+[`DEPLOYMENTS.md`](./DEPLOYMENTS.md) for addresses, tx hashes, and live verification.
 
 ## Layout
 
 ```
 src/
+├── identity/
+│   ├── AgentRegistry.sol     # name resolver + factory; nonReentrant register()
+│   └── AgentNFT.sol          # ERC-721 ownership token (minter-gated)
+├── accounts/
+│   ├── AgentAccount.sol      # ERC-6551 token-bound wallet (owner-gated execute)
+│   └── ERC6551Registry.sol   # canonical ERC-6551 reference registry
 ├── agents/
-│   ├── OracleAgent.sol       # Tier-5 consensus-verified BTC price oracle (live on Shannon)
+│   ├── OracleAgent.sol       # consensus-verified BTC price oracle (live on Shannon)
 │   └── lib/SomniaAgents.sol  # canonical Somnia Agents types & interfaces
+└── interfaces/IERC6551.sol
 test/
-└── OracleAgent.t.sol         # 15 tests, all 4 Somnia Agents pitfalls covered
+├── AgentIdentity.t.sol           # core register/resolve/transfer/validation (24)
+├── AgentIdentitySecurity.t.sol   # reentrancy + ERC-6551 abuse paths (7)
+├── AgentIdentityFuzz.t.sol       # differential fuzz of name validation (4)
+├── AgentIdentityInvariant.t.sol  # registry invariants under fuzzed sequences (4)
+└── OracleAgent.t.sol             # all 4 Somnia Agents pitfalls + refund/withdraw (26)
 script/
+├── DeployIdentity.s.sol
 ├── DeployOracleAgent.s.sol
 └── RequestBtcPrice.s.sol
 ```
+
+`forge test` → **65 tests**. The bounded invariant config lives in `foundry.toml`;
+for a deep local run: `forge test --match-path 'test/*Invariant*' --invariant-runs 256 --invariant-depth 256`.
 
 ## Commands
 

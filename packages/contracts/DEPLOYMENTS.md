@@ -2,73 +2,97 @@
 
 ## Shannon testnet (chain 50312)
 
-### Identity layer (Day 2) — `<name>@tsugu` agents with ERC-6551 wallets
+### Identity layer (current) — hardened, reentrancy-guarded
+
+`<name>@tsugu` agents with ERC-6551 wallets. `register()` is now `nonReentrant` and
+reserves the name before minting — closing the `_safeMint` reentrancy that let a
+malicious owner claim one name twice (see [`../../SECURITY.md`](../../SECURITY.md)).
 
 | Contract | Address |
 |---|---|
-| **AgentRegistry** (name resolver + factory) | [`0xa98a6d4BC0099D2fc5D1d81a79770592c2a91a08`](https://shannon-explorer.somnia.network/address/0xa98a6d4BC0099D2fc5D1d81a79770592c2a91a08) |
-| **AgentNFT** (ERC-721 ownership token) | [`0x7DeD25aEb99e8b31accC1EE658c7E9361D4DAB70`](https://shannon-explorer.somnia.network/address/0x7DeD25aEb99e8b31accC1EE658c7E9361D4DAB70) |
-| **ERC6551Registry** (TBA factory) | [`0x4575c8652be0db8bbdc01b43dede8585414b2002`](https://shannon-explorer.somnia.network/address/0x4575c8652be0db8bbdc01b43dede8585414b2002) |
-| **AgentAccount** (TBA implementation) | [`0x9b7f1a851e549de4716a548c87734c6bec5acd51`](https://shannon-explorer.somnia.network/address/0x9b7f1a851e549de4716a548c87734c6bec5acd51) |
+| **AgentRegistry** (name resolver + factory) | [`0x9Df3c688e2aE988Ff63672A98335d3BEfAdC452E`](https://shannon-explorer.somnia.network/address/0x9Df3c688e2aE988Ff63672A98335d3BEfAdC452E) |
+| **AgentNFT** (ERC-721 ownership token) | [`0x2DCD1758CaA40c004cA9F8593b032c384eA10925`](https://shannon-explorer.somnia.network/address/0x2DCD1758CaA40c004cA9F8593b032c384eA10925) |
+| **ERC6551Registry** (TBA factory) | [`0x7f3b56f5D737010885FaAeAa771fb2e61d33Ec8B`](https://shannon-explorer.somnia.network/address/0x7f3b56f5D737010885FaAeAa771fb2e61d33Ec8B) |
+| **AgentAccount** (TBA implementation) | [`0x4c4e4B24613c285e33c4c0b5DB0603936A0df600`](https://shannon-explorer.somnia.network/address/0x4c4e4B24613c285e33c4c0b5DB0603936A0df600) |
 
-**First agent registered (2026-05-30):**
+Registry deploy block: **398072018** (the SDK uses this to bound `hasEverOwned` log scans).
+`AgentNFT.minter` is wired to the registry and locked.
 
-| Field | Value |
-|---|---|
-| name | `neo` (`neo@tsugu`) |
-| tokenId | 1 |
-| wallet (ERC-6551 TBA) | [`0x3Ec0397677a61121CAe3b503835EDd3bB76061d3`](https://shannon-explorer.somnia.network/address/0x3Ec0397677a61121CAe3b503835EDd3bB76061d3) |
-| owner | `0x875eFb079A2b68267a1bE03cAd0E1A7Ee4bA0B2E` |
-| seed | 0.05 STT |
-| `register` tx | [`0xace1…9679`](https://shannon-explorer.somnia.network/tx/0xace1ccd2655be34e4eb597ddf8edea42541bf8727bbd4c99cfe019506f8e9679) |
-| `setMinter` tx | [`0x04ab…0d1c`](https://shannon-explorer.somnia.network/tx/0x04ab8033eef825b3e4b6d4ab887332d767dfaeab76c68930919b85fc7dbd0d1c) |
+**Live end-to-end verification (2026-06-02)** — the full self-sovereign lifecycle,
+run against this deployment with an HD-derived owner key (`qa-c9d36e@tsugu`, token #1,
+wallet [`0xe462…55C1`](https://shannon-explorer.somnia.network/address/0xe4622f4768A3Dfc0b6cB5619Ee2Bf5b793da55C1)):
 
-**Verified on-chain:** predicted wallet == deployed wallet (ERC-6551 CREATE2 determinism), `wallet.token()` returns `(50312, AgentNFT, 1)`, `wallet.owner()` tracks the NFT holder. 24/24 identity tests pass (`test/AgentIdentity.t.sol`).
+| Step | Result | Tx |
+|---|---|---|
+| **create** | agent minted, wallet seeded 0.02 STT, owned by its own derived key | [`0x0b68…9242`](https://shannon-explorer.somnia.network/tx/0x0b6891118348de2d2261788a5ec9977664f47a386048c4661b88df9936b99242) |
+| **exec** | agent sent **0.005 STT from its own wallet** (0.02 → 0.015) | [`0x66e3…de6e`](https://shannon-explorer.somnia.network/tx/0x66e3429df99f49de43f87da37fe029d2de30c65bd9d8a29d2a7e0b603fc4de6e) |
+| non-owner exec | **rejected** (owner-gated) | — |
+| **transfer** | ownership moved; `resolve()` reflects new owner; `hasEverOwned(old)` stays true | [`0x377b…7092`](https://shannon-explorer.somnia.network/tx/0x377b13cdc531a27a3f7f9a19d758035a6ff86fe0f2308ebd4c6cc34ba5597092) |
+
+Reproduce with `PRIVATE_KEY=0x… tsx packages/cli/scripts/verify-shannon.mts`.
 
 **Notes for integrators:**
 - `register(name, owner)` is payable — forwarded STT seeds the new agent wallet.
 - Transfer the AgentNFT → the agent's wallet control transfers with it. No migration.
+- `AgentAccount.execute(to, value, data, 0)` is how an agent acts — owner-gated.
 - Names: lowercase `a-z`, `0-9`, hyphen; 1–32 chars; no leading/trailing/doubled hyphen.
-- ERC-1271 (smart-account signatures) is deferred: OZ's SignatureChecker uses the `mcopy` (Cancun) opcode, unavailable on Shannon's pre-Shanghai EVM. OZ pinned to v5.0.2 for the same reason.
+- ERC-1271 (smart-account signatures) is deferred: OZ's `SignatureChecker` uses `mcopy`
+  (Cancun), unavailable on Shannon's pre-Shanghai EVM. OZ pinned to v5.0.2.
+
+#### Identity layer v1 (deprecated)
+
+| Contract | Address | Status |
+|---|---|---|
+| AgentRegistry | [`0xa98a6d4BC0099D2fc5D1d81a79770592c2a91a08`](https://shannon-explorer.somnia.network/address/0xa98a6d4BC0099D2fc5D1d81a79770592c2a91a08) | **Deprecated** |
+
+**Do not use.** `register()` followed checks-effects-interactions incorrectly: the
+duplicate-name guard ran before the name record was written, so a contract `owner`
+could re-enter via `onERC721Received` and register the same name twice (two agents,
+one name). Replaced by the guarded deployment above. Reference only.
 
 ---
 
-### OracleAgent (current) — hardened post-review
+### OracleAgent (current) — hardened
+
+Consensus-verified price oracle via the Somnia Agents JSON API. Adds a non-owner
+overpayment **refund**, `Withdrawn`/`Refunded` events, a `withdrawAll` sweep, and
+`nonReentrant` on the request/withdraw paths.
 
 | Field | Value |
 |---|---|
-| Address | [`0xC221B027E8Ba0f9c680c3c55533105BC1491Ae79`](https://shannon-explorer.somnia.network/address/0xC221B027E8Ba0f9c680c3c55533105BC1491Ae79) |
-| Deployer / owner | `0x875eFb079A2b68267a1bE03cAd0E1A7Ee4bA0B2E` |
+| Address | [`0x4C9Fab534F97c76F4Ed6895Fda07Eb601f363188`](https://shannon-explorer.somnia.network/address/0x4C9Fab534F97c76F4Ed6895Fda07Eb601f363188) |
 | Platform | `0x037Bb9C718F3f7fe5eCBDB0b600D607b52706776` |
-| Agent ID | `13174292974160097713` (JSON API) |
-| Subcommittee size | 3 |
-| Per-agent reward | 0.03 STT |
-| Required deposit | 0.12 STT |
-| Access model | **Caller-pays** — non-owners must forward `msg.value >= requiredDeposit()`. Owner may spend contract balance. |
+| Agent ID | `13174292974160097713` (JSON API) · subcommittee 3 · per-agent reward 0.03 STT |
+| Required deposit | **0.12 STT** (read live via the precompile) |
+| Access model | **Caller-pays** — non-owners forward `msg.value ≥ requiredDeposit()`; overpayment refunded. |
 
-**Deploy + seed (2026-05-21):**
+**Live verification (2026-06-02):** seeded 0.15 STT
+([`0x0fb6…48d7`](https://shannon-explorer.somnia.network/tx/0x0fb6dde5728a6e8790daead26ddab17a8bd21a3314c3c1cc2dc7e6c2415248d7)),
+then `requestBitcoinPrice()` (requestId `3864073`,
+[`0x8352…8cf5`](https://shannon-explorer.somnia.network/tx/0x8352ae9190dd65d11c451f762e424b7f143e43b87de64ef53ea53ccf9e088cf5)).
+Consensus callback updated `latestPrice = 7,116,900,000,000` → **BTC = $71,169.00**
+(8 decimals, 3 validators); `pendingRequests` cleared.
 
-| Step | Block | Tx |
-|---|---|---|
-| Deploy | 388,449,876 | [`0x924a...0162`](https://shannon-explorer.somnia.network/tx/0x924a83e659b5c33f2da3e84fc11e44a95028774083fa6a72e8ba7c2b12860162) (15.9M gas) |
-| Seed (0.15 STT) | — | [`0xe550...a808e`](https://shannon-explorer.somnia.network/tx/0xe55031f683b8afd1610f3883ed2d994d76b028b1ae8586192e871566869a808e) |
-| `requestBitcoinPrice()` | 388,450,063 | [`0x63f7...ec2d`](https://shannon-explorer.somnia.network/tx/0x63f79f26d14ae67d930728ed3725607de674b4d4d8d99013abe66f61c11cec2d) (655k gas) |
+#### OracleAgent — earlier deploys (deprecated)
 
-**Result:** `latestPrice = 7,715,000,000,000` → **BTC = $77,150.00** (8 decimals, consensus of 3 validators)
-
-### OracleAgent v1 (deprecated)
-
-| Field | Value |
+| Address | Status |
 |---|---|
-| Address | [`0x272A6F953C17FB528aE0d5085629A9024F1c6DE0`](https://shannon-explorer.somnia.network/address/0x272A6F953C17FB528aE0d5085629A9024F1c6DE0) |
-| Status | **Deprecated.** Open-callable `requestUintFromJson` permitted DoS + arbitrary-URL attacks against contract balance. Funds withdrawn back to owner. |
-| Withdraw tx | [`0x3a45...d141`](https://shannon-explorer.somnia.network/tx/0x3a4599c83b80d281642d96336cb5b5b12200072c88933c960592e4009969d141) |
-
-Do not use. Reference only for the history of the initial Day-1 deploy.
+| [`0xC221B027E8Ba0f9c680c3c55533105BC1491Ae79`](https://shannon-explorer.somnia.network/address/0xC221B027E8Ba0f9c680c3c55533105BC1491Ae79) | Superseded by the hardened deploy above (refund + events + guards). |
+| [`0x272A6F953C17FB528aE0d5085629A9024F1c6DE0`](https://shannon-explorer.somnia.network/address/0x272A6F953C17FB528aE0d5085629A9024F1c6DE0) | Day-1 open-callable `requestUintFromJson` (DoS / arbitrary-URL). Funds withdrawn. |
 
 ## Notes for integrators
 
-- **Reading** `latestPrice()` and `lastUpdated()` is free (view functions, no gas). Always check `block.timestamp - lastUpdated()` before trading on the value — there is no automatic staleness guard.
-- **Requesting** a fresh price costs `requiredDeposit()` (currently 0.12 STT). Send it as `msg.value` if you are not the contract owner.
-- All four canonical Somnia Agents pitfalls (deposit math, `receive()`, callback gating, status branching) are tested in `test/OracleAgent.t.sol` (20/20 passing).
-- See `src/agents/lib/SomniaAgents.sol` for the canonical platform types — pin imports against this file, not the docs directly, so a doc revision can't silently break compilation.
+- **Reading** `latestPrice()`/`lastUpdated()` is free. Always check
+  `block.timestamp - lastUpdated()` before trading on the value — there is no
+  automatic staleness guard.
+- **Requesting** a fresh price costs `requiredDeposit()` (0.12 STT). Non-owners send it
+  as `msg.value`; overpayment is refunded.
+- All four canonical Somnia Agents pitfalls (deposit math, `receive()`, callback gating,
+  status branching) are tested in `test/OracleAgent.t.sol`.
+- See `src/agents/lib/SomniaAgents.sol` for the canonical platform types — pin imports
+  against this file, not the docs, so a doc revision can't silently break compilation.
+
+## Test coverage
+
+`forge test` → **65** (identity + fuzz + invariant + security + oracle).
+`pnpm --filter @tsugu/sdk test` → **27** · `pnpm --filter @tsugu/cli test` → **28**. CI runs all three.

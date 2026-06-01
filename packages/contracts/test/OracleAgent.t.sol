@@ -102,6 +102,8 @@ contract OracleAgentTest is Test {
     event PriceReceived(uint256 indexed requestId, uint256 price, uint256 timestamp);
     event RequestFailed(uint256 indexed requestId, ResponseStatus status);
     event Funded(address indexed from, uint256 amount);
+    event Refunded(address indexed to, uint256 amount);
+    event Withdrawn(address indexed to, uint256 amount);
 
     function setUp() public {
         platform = new MockAgentPlatform();
@@ -312,6 +314,77 @@ contract OracleAgentTest is Test {
         Response[] memory empty = new Response[](0);
         vm.expectRevert(abi.encodeWithSelector(OracleAgent.EmptySuccessResponse.selector, id));
         platform.fireRawCallback(address(oracle), id, empty, ResponseStatus.Success);
+    }
+
+    // ---------------------------------------------------------------------
+    // Overpayment refund (review-hardening): a non-owner's excess STT must not
+    // be trapped as a silent donation to the owner.
+    // ---------------------------------------------------------------------
+
+    function test_request_refundsNonOwnerOverpayment() public {
+        uint256 deposit = oracle.requiredDeposit();
+        uint256 overpay = 0.5 ether;
+        vm.deal(stranger, 1 ether);
+
+        vm.expectEmit(true, false, false, true, address(oracle));
+        emit Refunded(stranger, overpay);
+        vm.prank(stranger);
+        oracle.requestBitcoinPrice{value: deposit + overpay}();
+
+        // Stranger is out exactly the deposit; the excess came back.
+        assertEq(stranger.balance, 1 ether - deposit, "non-owner only pays the deposit");
+        // Oracle forwarded the deposit and refunded the rest — nothing trapped.
+        assertEq(address(oracle).balance, 0, "no excess trapped in oracle");
+        assertEq(platform.lastValue(), deposit, "platform got exactly the deposit");
+    }
+
+    function test_request_noRefundForExactNonOwnerPayment() public {
+        uint256 deposit = oracle.requiredDeposit();
+        vm.deal(stranger, 1 ether);
+        vm.prank(stranger);
+        uint256 id = oracle.requestBitcoinPrice{value: deposit}();
+        assertTrue(oracle.pendingRequests(id), "request landed");
+        assertEq(stranger.balance, 1 ether - deposit, "exact payment, no change");
+        assertEq(address(oracle).balance, 0, "nothing left over");
+    }
+
+    function test_request_ownerOverpaymentStaysAsContractTopUp() public {
+        // Owner (this contract) intentionally tops up while requesting; the excess
+        // stays in the owner's own contract rather than being refunded.
+        uint256 deposit = oracle.requiredDeposit();
+        uint256 extra = 0.2 ether;
+        oracle.requestBitcoinPrice{value: deposit + extra}();
+        assertEq(address(oracle).balance, extra, "owner overpayment stays as balance");
+    }
+
+    // ---------------------------------------------------------------------
+    // Withdraw events + sweep
+    // ---------------------------------------------------------------------
+
+    function test_withdraw_emitsWithdrawn() public {
+        _fund(1 ether);
+        address payable sink = payable(address(0xDEAD));
+        vm.expectEmit(true, false, false, true, address(oracle));
+        emit Withdrawn(sink, 0.4 ether);
+        oracle.withdraw(sink, 0.4 ether);
+    }
+
+    function test_withdrawAll_sweepsBalanceAndEmits() public {
+        _fund(1 ether);
+        address payable sink = payable(address(0xBEEF));
+        uint256 before = sink.balance;
+        vm.expectEmit(true, false, false, true, address(oracle));
+        emit Withdrawn(sink, 1 ether);
+        oracle.withdrawAll(sink);
+        assertEq(sink.balance - before, 1 ether, "full balance swept");
+        assertEq(address(oracle).balance, 0, "oracle emptied");
+    }
+
+    function test_withdrawAll_onlyOwner() public {
+        _fund(1 ether);
+        vm.prank(stranger);
+        vm.expectRevert(OracleAgent.NotOwner.selector);
+        oracle.withdrawAll(payable(stranger));
     }
 
     receive() external payable {}

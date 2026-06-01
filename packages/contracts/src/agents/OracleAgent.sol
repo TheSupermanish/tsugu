@@ -2,6 +2,7 @@
 pragma solidity ^0.8.20;
 
 import {IAgentRequester, IJsonApiAgent, Response, Request, ResponseStatus} from "./lib/SomniaAgents.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /// @title  OracleAgent — tsugu's day-1 Somnia Agents wrapper
 /// @notice Fetches a uint256 price from any HTTPS JSON endpoint via the
@@ -12,7 +13,7 @@ import {IAgentRequester, IJsonApiAgent, Response, Request, ResponseStatus} from 
 ///         (2) receive() accepts rebates pushed back from the platform
 ///         (3) handleResponse() is gated on platform sender + known requestId
 ///         (4) ResponseStatus is checked before any abi.decode of the result
-contract OracleAgent {
+contract OracleAgent is ReentrancyGuard {
     IAgentRequester public immutable platform;
     uint256 public immutable jsonApiAgentId;
     uint256 public immutable subcommitteeSize;
@@ -44,12 +45,15 @@ contract OracleAgent {
     event PriceReceived(uint256 indexed requestId, uint256 price, uint256 timestamp);
     event RequestFailed(uint256 indexed requestId, ResponseStatus status);
     event Funded(address indexed from, uint256 amount);
+    event Refunded(address indexed to, uint256 amount);
+    event Withdrawn(address indexed to, uint256 amount);
 
     error InsufficientDeposit(uint256 sent, uint256 required);
     error NotPlatform(address caller);
     error UnknownRequest(uint256 requestId);
     error NotOwner();
     error EmptySuccessResponse(uint256 requestId);
+    error RefundFailed();
 
     constructor(address platform_, uint256 jsonApiAgentId_, uint256 subcommitteeSize_, uint256 perAgentReward_) {
         platform = IAgentRequester(platform_);
@@ -81,6 +85,7 @@ contract OracleAgent {
     function requestUintFromJson(string memory url, string memory jsonPath, uint8 decimals)
         public
         payable
+        nonReentrant
         returns (uint256 requestId)
     {
         if (msg.value > 0) emit Funded(msg.sender, msg.value);
@@ -106,6 +111,16 @@ contract OracleAgent {
         lastRequestId = requestId;
 
         emit PriceRequested(requestId, url, jsonPath);
+
+        // Refund a non-owner's overpayment. Their excess STT must not be trapped
+        // as a silent donation to the contract owner. (The owner's own overpayment
+        // stays as a top-up of their own contract.) Sent last, behind nonReentrant.
+        if (msg.sender != owner && msg.value > deposit) {
+            uint256 refund = msg.value - deposit;
+            (bool ok,) = msg.sender.call{value: refund}("");
+            if (!ok) revert RefundFailed();
+            emit Refunded(msg.sender, refund);
+        }
     }
 
     /// @notice Platform callback. Gated on sender + known requestId. Status checked
@@ -142,10 +157,20 @@ contract OracleAgent {
     }
 
     /// @notice Pull funds back out (owner only). Useful at end-of-demo.
-    function withdraw(address payable to, uint256 amount) external {
+    function withdraw(address payable to, uint256 amount) external nonReentrant {
         if (msg.sender != owner) revert NotOwner();
         (bool ok,) = to.call{value: amount}("");
         require(ok, "withdraw failed");
+        emit Withdrawn(to, amount);
+    }
+
+    /// @notice Sweep the entire balance back to `to` (owner only).
+    function withdrawAll(address payable to) external nonReentrant {
+        if (msg.sender != owner) revert NotOwner();
+        uint256 amount = address(this).balance;
+        (bool ok,) = to.call{value: amount}("");
+        require(ok, "withdraw failed");
+        emit Withdrawn(to, amount);
     }
 
     /// @dev Accepts rebates from the platform (and topups from the owner).
