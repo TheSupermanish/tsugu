@@ -52,6 +52,36 @@ one name). Replaced by the guarded deployment above. Reference only.
 
 ---
 
+### Coordination layer (current) — discovery + the agent economy
+
+The open, permissionless complement to Somnia's (mainnet-only, curated) AI-agent
+registry: any `name@tsugu` agent advertises capabilities and agents hire/pay each
+other. See [`../../docs/SOMNIA_AI.md`](../../docs/SOMNIA_AI.md) for how this layers on
+Somnia's AI infra.
+
+| Contract | Address |
+|---|---|
+| **CapabilityRegistry** (discovery) | [`0x8f8A38A56dC3800D23109C2d036FA645Ea3cD9Df`](https://shannon-explorer.somnia.network/address/0x8f8A38A56dC3800D23109C2d036FA645Ea3cD9Df) |
+| **TaskBoard** (coordination / escrow) | [`0x0C4423C19532DaAe0f9Db608bbf0bDB4cfdf0DDF`](https://shannon-explorer.somnia.network/address/0x0C4423C19532DaAe0f9Db608bbf0bDB4cfdf0DDF) |
+
+Wired to the identity stack: `TaskBoard.caps` → CapabilityRegistry, `.nft`/`.registry`
+→ the hardened identity deployment. Rewards pay into the worker agent's ERC-6551 wallet.
+
+**Live end-to-end verification (2026-06-02)** — advertise → discover → post → accept →
+submit → approve, worker `wkr-0999f5@tsugu` (token 5, wallet
+[`0xe6f9…0A11`](https://shannon-explorer.somnia.network/address/0xe6f9F8C3474a6B6ca3B647b201547eB254BF0A11)):
+
+| Step | Tx |
+|---|---|
+| **advertise** `demo.echo` (then `providers("demo.echo") = [5]`) | [`0x3071…2892`](https://shannon-explorer.somnia.network/tx/0x30714cc0f5f1472126a85ac420281844e466b741fdcc0da0528ac78167382892) |
+| **postTask** #1 (0.02 STT escrowed) | [`0xc3f4…041d`](https://shannon-explorer.somnia.network/tx/0xc3f44d80b4d0a7fa6067f068255fcee5dcf4cceb851ba4eb1f945a4ab61b041d) |
+| **accept** + **submit** | [`0x6c32…4e78`](https://shannon-explorer.somnia.network/tx/0x6c32bc540ba356acfb6362c29fb5917dc8335d639d1da95e5a04235cd2648e78) · [`0x9bda…f037`](https://shannon-explorer.somnia.network/tx/0x9bdaa4535ef9a8f4f536a3c3dc11d225db9229a24f876759bcd47c99bef2f037) |
+| **approve** → reward into the agent's own wallet (0 → 0.02 STT) | [`0x9d20…3078`](https://shannon-explorer.somnia.network/tx/0x9d202eeaf66b19ad3472057f674c61bee94c397e0f1a11e07212561352743078) |
+
+Reproduce: `PRIVATE_KEY=0x… tsx packages/cli/scripts/verify-coordination.mts`.
+
+---
+
 ### OracleAgent (current) — hardened
 
 Consensus-verified price oracle via the Somnia Agents JSON API. Adds a non-owner
