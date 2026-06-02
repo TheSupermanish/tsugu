@@ -130,6 +130,11 @@ contract TaskBoard is ReentrancyGuard {
     function submitResult(uint256 taskId, string calldata resultURI) external {
         Task storage t = _tasks[taskId];
         if (t.status != Status.Accepted) revert NotAccepted(taskId);
+        // Must submit BY the deadline. Without this, a worker who blew the deadline
+        // could front-run the poster's refund() with a late/garbage submitResult,
+        // flipping the task to Submitted (no longer refundable) and self-claiming the
+        // reward after the review window — stealing the escrow for zero work.
+        if (block.timestamp >= t.deadline) revert Expired(taskId);
         if (nft.ownerOf(t.workerTokenId) != msg.sender) revert NotWorkerOwner(taskId);
         t.resultURI = resultURI;
         t.submittedAt = uint64(block.timestamp);

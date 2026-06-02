@@ -1,5 +1,3 @@
-Repo facts confirmed. Now I'll write the report.
-
 # Somnia AI Infrastructure — and how tsugu maximizes it
 
 *Lead architect synthesis · verified 2026-06-02 · target chain: Somnia Shannon testnet (50312)*
@@ -67,7 +65,7 @@ function handleResponse(
 receive() external payable {}                    // REQUIRED — platform pushes the rebate here
 ```
 
-All four guards are wired in tsugu's reference `OracleAgent.sol` (`/Users/beyond/Desktop/projects/tsugu/packages/contracts/src/agents/OracleAgent.sol`, lines ~129–157), and the canonical types are pinned in `/Users/beyond/Desktop/projects/tsugu/packages/contracts/src/agents/lib/SomniaAgents.sol` — verified against the live repo. **Note:** that lib currently declares only `createRequest`, `getRequestDeposit`, and `IJsonApiAgent.fetchUint`. To use advanced consensus or on-chain request introspection, `createAdvancedRequest`, `getAdvancedRequestDeposit`, `getRequest`, and `hasRequest` must be added.
+All four guards are wired in tsugu's reference `OracleAgent.sol` (`/Users/beyond/Desktop/projects/tsugu/packages/contracts/src/agents/OracleAgent.sol`, lines ~129–157), and the canonical types are pinned in `/Users/beyond/Desktop/projects/tsugu/packages/contracts/src/agents/lib/SomniaAgents.sol` — verified against the live repo. **Note:** the lib now declares `IAgentRequester` (createRequest/getRequestDeposit), `IAgentRequesterAdvanced` (createAdvancedRequest/getAdvancedRequestDeposit), an extended `IJsonApiAgent` (fetchUint/Int/String/Bool), `ILlmAgent` (inferString/inferNumber), `IParseAgent` (ExtractString), and `SomniaAgentIds`; pure payload encoders live in `SomniaAI.sol`. Still NOT declared (add before use): `getRequest`/`hasRequest` introspection and the longer-tail fns (fetchStringArray/fetchUintArray/inferChat/inferToolsChat/ExtractANumber).
 
 ### Economics (the part that bites you)
 

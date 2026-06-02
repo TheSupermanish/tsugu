@@ -551,14 +551,23 @@ export class TsuguClient {
     });
   }
 
-  /** Discover the agents (tokenIds) advertising a capability. */
-  async providers(capability: string): Promise<readonly bigint[]> {
-    return this.publicClient.readContract({
-      address: this.capsAddr(),
-      abi: capabilityRegistryAbi,
-      functionName: "providers",
-      args: [capabilityTag(capability)],
-    });
+  /** Discover the agents (tokenIds) advertising a capability. Pages via providersPage
+   *  (bounded reads) so a popular tag never trips an eth_call response-size limit. */
+  async providers(capability: string): Promise<bigint[]> {
+    const tag = capabilityTag(capability);
+    const PAGE = 500n;
+    const out: bigint[] = [];
+    for (let offset = 0n; ; offset += PAGE) {
+      const page = await this.publicClient.readContract({
+        address: this.capsAddr(),
+        abi: capabilityRegistryAbi,
+        functionName: "providersPage",
+        args: [tag, offset, PAGE],
+      });
+      out.push(...page);
+      if (BigInt(page.length) < PAGE) break;
+    }
+    return out;
   }
 
   /** An agent's service listing (URI, price, listed). */

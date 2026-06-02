@@ -238,6 +238,25 @@ contract TaskBoardTest is Test {
         assertEq(poster.balance - before, 1 ether);
     }
 
+    function test_submit_rejectedAfterDeadline_posterCanStillReclaim() public {
+        // A worker who accepts then blows the deadline must NOT be able to submit
+        // (and thereby lock the poster out of refund + self-claim the reward).
+        uint256 taskId = _post(1 ether, uint64(block.timestamp + 1 days));
+        vm.prank(worker);
+        board.acceptTask(taskId, workerId);
+        vm.warp(block.timestamp + 2 days); // past the deadline, nothing submitted
+
+        vm.prank(worker);
+        vm.expectRevert(abi.encodeWithSelector(TaskBoard.Expired.selector, taskId));
+        board.submitResult(taskId, "garbage");
+
+        // The poster's anti-grief refund still works.
+        uint256 before = poster.balance;
+        vm.prank(poster);
+        board.refund(taskId);
+        assertEq(poster.balance - before, 1 ether, "poster reclaims when the worker missed the deadline");
+    }
+
     function test_refund_notRefundableWhenSubmitted() public {
         uint256 taskId = _post(1 ether, uint64(block.timestamp + 1 days));
         vm.prank(worker);

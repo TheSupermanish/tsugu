@@ -618,7 +618,12 @@ task
       console.error(bad("  ✗ --reward must be greater than 0 (a task needs an escrowed reward)."));
       process.exit(1);
     }
-    const deadline = opts.deadline ? parseInt(opts.deadline, 10) : Math.floor(Date.now() / 1000) + 7 * 86400;
+    const now = Math.floor(Date.now() / 1000);
+    const deadline = opts.deadline ? Number(opts.deadline) : now + 7 * 86400;
+    if (!Number.isInteger(deadline) || deadline <= now) {
+      console.error(bad("  ✗ --deadline must be a future unix timestamp in seconds."));
+      process.exit(1);
+    }
     const { operatorKey } = await unlock();
     const c = client(operatorKey);
     await assertFunded(c, rewardWei + parseEther("0.05"), "post a task");

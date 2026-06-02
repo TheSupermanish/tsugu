@@ -62,10 +62,12 @@ Somnia's AI infra.
 | Contract | Address |
 |---|---|
 | **CapabilityRegistry** (discovery) | [`0xb92168c5D637A3087Da85f757c607F2f508DDc96`](https://shannon-explorer.somnia.network/address/0xb92168c5D637A3087Da85f757c607F2f508DDc96) |
-| **TaskBoard** (coordination / escrow) | [`0x023e38320BCe3CefF56083C76111EaDf4849752c`](https://shannon-explorer.somnia.network/address/0x023e38320BCe3CefF56083C76111EaDf4849752c) |
+| **TaskBoard** (coordination / escrow) | [`0xA59f329689fD5DA78D0fE79dc285297E050a2B16`](https://shannon-explorer.somnia.network/address/0xA59f329689fD5DA78D0fE79dc285297E050a2B16) |
 
-Hardened post-review: `MAX_TAGS` (64) cap + `providersPage` paginated discovery (anti-DoS),
-and a payout safety assert. Supersedes the first deploy (`0x8f8A…D9Df` / `0x0C44…0DDF`).
+Hardened across two adversarial review rounds: `MAX_TAGS` (64) cap + `providersPage`
+paginated discovery (anti-DoS), payout safety assert, and — closing a HIGH found on
+re-review — `submitResult` now enforces the deadline so a worker can't front-run the
+poster's refund and steal the escrow. Supersedes `0x8f8A…`/`0x0C44…` and `0x023e…752c`.
 Wired to the identity stack: `TaskBoard.caps` → CapabilityRegistry, `.nft`/`.registry`
 → the hardened identity deployment. Rewards pay into the worker agent's ERC-6551 wallet.
 
@@ -124,5 +126,5 @@ Consensus callback updated `latestPrice = 7,116,900,000,000` → **BTC = $71,169
 
 ## Test coverage
 
-`forge test` → **65** (identity + fuzz + invariant + security + oracle).
-`pnpm --filter @tsugu/sdk test` → **27** · `pnpm --filter @tsugu/cli test` → **28**. CI runs all three.
+`forge test` → **102** (identity + fuzz + invariant + security + oracle + coordination + SomniaAI).
+`pnpm --filter @tsugu/sdk test` → **34** · `pnpm --filter @tsugu/cli test` → **29**. CI runs all three.

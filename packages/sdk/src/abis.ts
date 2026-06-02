@@ -188,6 +188,17 @@ export const capabilityRegistryAbi = [
   },
   {
     type: "function",
+    name: "providersPage",
+    stateMutability: "view",
+    inputs: [
+      { name: "tag", type: "bytes32" },
+      { name: "offset", type: "uint256" },
+      { name: "limit", type: "uint256" },
+    ],
+    outputs: [{ name: "page", type: "uint256[]" }],
+  },
+  {
+    type: "function",
     name: "listings",
     stateMutability: "view",
     inputs: [{ name: "", type: "uint256" }],

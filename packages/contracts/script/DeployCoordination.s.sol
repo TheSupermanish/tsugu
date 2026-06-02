@@ -19,6 +19,8 @@ contract DeployCoordination is Script {
         uint256 pk = vm.envUint("PRIVATE_KEY");
         address nft = vm.envOr("AGENT_NFT", address(0x2DCD1758CaA40c004cA9F8593b032c384eA10925));
         address registry = vm.envOr("AGENT_REGISTRY", address(0x9Df3c688e2aE988Ff63672A98335d3BEfAdC452E));
+        // Reuse an existing (unchanged) CapabilityRegistry to redeploy only TaskBoard.
+        address existingCaps = vm.envOr("CAPABILITY_REGISTRY", address(0));
 
         console2.log("== tsugu :: DeployCoordination ==");
         console2.log("deployer ", vm.addr(pk));
@@ -26,7 +28,8 @@ contract DeployCoordination is Script {
         console2.log("registry ", registry);
 
         vm.startBroadcast(pk);
-        CapabilityRegistry caps = new CapabilityRegistry(AgentNFT(nft));
+        CapabilityRegistry caps =
+            existingCaps == address(0) ? new CapabilityRegistry(AgentNFT(nft)) : CapabilityRegistry(existingCaps);
         TaskBoard board = new TaskBoard(AgentNFT(nft), AgentRegistry(registry), caps);
         vm.stopBroadcast();
 

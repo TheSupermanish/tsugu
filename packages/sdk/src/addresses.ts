@@ -26,7 +26,7 @@ export const deployments: Record<
     // Coordination layer (discovery + task board) — hardened (MAX_TAGS, paginated
     // discovery, payout safety). Supersedes 0x8f8A…/0x0C44….
     capabilityRegistry: "0xb92168c5D637A3087Da85f757c607F2f508DDc96",
-    taskBoard: "0x023e38320BCe3CefF56083C76111EaDf4849752c",
+    taskBoard: "0xA59f329689fD5DA78D0fE79dc285297E050a2B16",
     deployBlock: 398072018n,
   },
 };
