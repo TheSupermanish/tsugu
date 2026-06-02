@@ -253,6 +253,16 @@ export class AsomClient {
     return false;
   }
 
+  /** The registered name of an agent by tokenId (for reverse lookup / discovery display). */
+  async nameOf(tokenId: bigint): Promise<string> {
+    return this.publicClient.readContract({
+      address: this.addresses.agentNFT,
+      abi: agentNftAbi,
+      functionName: "nameOf",
+      args: [tokenId],
+    });
+  }
+
   /** The current on-chain `state` nonce of an agent wallet (bumps on every execute). */
   async agentState(account: Address): Promise<bigint> {
     return this.publicClient.readContract({
