@@ -16,6 +16,7 @@ import {
 export { vaultAbi };
 export type { PactKind, ClaimType, PactStatus, CheckStatus };
 export const vaultAddress = vaultDeployments[shannon.id].vault as Address;
+export const strategyAddress = vaultDeployments[shannon.id].strategy as Address;
 export const vaultDeployBlock = vaultDeployments[shannon.id].deployBlock;
 export const EXPLORER = "https://shannon-explorer.somnia.network";
 
@@ -51,6 +52,8 @@ export type Pact = {
   confirmedAt: bigint;
   disputeWindow: bigint;
   escrow: bigint;
+  yieldOn: boolean;
+  shares: bigint;
   claim: string;
   checks: readonly Check[];
 };

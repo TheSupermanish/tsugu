@@ -46,6 +46,13 @@ export default function PactPage({ params }: { params: { id: string } }) {
     args: [id, (address ?? zeroAddress) as `0x${string}`],
     query: { enabled: !!address, refetchInterval: 5000 },
   });
+  const yieldQ = useReadContract({
+    address: vaultAddress,
+    abi: vaultAbi,
+    functionName: "yieldValue",
+    args: [id],
+    query: { refetchInterval: 5000 },
+  });
 
   const { writeContract, data: hash, isPending, error } = useWriteContract();
   const { isLoading: confirming, isSuccess } = useWaitForTransactionReceipt({ hash });
@@ -129,6 +136,19 @@ export default function PactPage({ params }: { params: { id: string } }) {
           </div>
           {mine > 0n && <div className="text-sm text-porcelain-dim">You contributed <span className="text-porcelain">{fmtStt(mine)} STT</span></div>}
         </div>
+        {pact.yieldOn && (() => {
+          const yv = (yieldQ.data as bigint | undefined) ?? pact.escrow;
+          const earned = yv > pact.escrow ? yv - pact.escrow : 0n;
+          return (
+            <div className="mt-3 flex items-center gap-2 text-sm">
+              <span className="chip border-gold-600/50 bg-gold-500/10 text-gold-300">⟳ Earning yield</span>
+              <span className="text-porcelain-dim">
+                now worth <span className="font-mono text-porcelain">{fmtStt(yv)} STT</span>
+                {earned > 0n && <span className="text-jade"> (+{fmtStt(earned)})</span>}
+              </span>
+            </div>
+          );
+        })()}
         <div className="mt-5">
           <SeamMeter statuses={statuses} quorum={pact.quorum} />
         </div>

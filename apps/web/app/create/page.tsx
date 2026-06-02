@@ -34,6 +34,7 @@ export default function CreatePact() {
   const [checks, setChecks] = useState<CheckDraft[]>([blankCheck()]);
   const [quorum, setQuorum] = useState(1);
   const [seed, setSeed] = useState("");
+  const [earnYield, setEarnYield] = useState(false);
 
   useEffect(() => {
     if (!receipt) return;
@@ -86,6 +87,7 @@ export default function CreatePact() {
           deadline,
           disputeWindow: BigInt(windowSecs),
           quorum,
+          earnYield,
           claim: claim.trim(),
           checks: checks.map((c) => ({
             claimType: CLAIM_TYPES.indexOf(c.claimType),
@@ -266,7 +268,7 @@ export default function CreatePact() {
           </div>
         </section>
 
-        {/* Seed */}
+        {/* Seed + yield */}
         <section className="panel p-6">
           <h2 className="text-lg">Seed it (optional)</h2>
           <p className="mt-1 text-sm text-porcelain-dim">Kick off the escrow with your own contribution. Others can add more.</p>
@@ -280,6 +282,29 @@ export default function CreatePact() {
             />
             <span className="text-porcelain-dim">STT</span>
           </div>
+
+          <button
+            type="button"
+            onClick={() => setEarnYield((v) => !v)}
+            className={`mt-5 flex w-full items-center gap-3 rounded-xl border p-4 text-left transition-colors ${
+              earnYield ? "border-gold-600/60 bg-gold-500/5" : "border-ink-700 hover:border-ink-600"
+            }`}
+          >
+            <span
+              className={`grid h-5 w-5 shrink-0 place-items-center rounded-md border ${
+                earnYield ? "border-gold-500 bg-gold-500 text-ink-950" : "border-ink-600"
+              }`}
+            >
+              {earnYield ? "✓" : ""}
+            </span>
+            <span>
+              <span className="text-porcelain">Earn yield while it waits</span>
+              <span className="mt-0.5 block text-xs text-porcelain-dim">
+                Escrow is put to work until proof. On release the beneficiary gets principal + yield; if denied or
+                unresolved, contributors are refunded principal + their share of yield. Adds venue risk — opt-in.
+              </span>
+            </span>
+          </button>
         </section>
 
         <Seam />
