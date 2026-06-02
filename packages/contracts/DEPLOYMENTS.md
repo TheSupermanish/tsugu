@@ -2,6 +2,44 @@
 
 ## Shannon testnet (chain 50312)
 
+### Tsugu — Vault + yield strategy (current headline)
+
+`Vault is AgentCompute` — the AI-verified conditional escrow (**Pacts**). Multi-source M-of-N
+quorum across all three Somnia agents (Web→parse, Data→JSON, Text→LLM); opt-in yield; escrow
+ring-fenced; pull-payment release. Security-reviewed (multi-agent adversarial + Slither); a
+critical ERC-4626 inflation attack on the yield strategy was found and fixed. `forge test` → **182**.
+
+| Contract | Address |
+|---|---|
+| **Vault** (Pacts) | [`0x5F7CF1e3206140CB73e5365E287AE8D1d7B770dC`](https://shannon-explorer.somnia.network/address/0x5F7CF1e3206140CB73e5365E287AE8D1d7B770dC) |
+| **DemoYieldStrategy** (testnet yield reserve) | [`0xFFFF7c37D382e17B88A4F92c363dE6511E9bDfEF`](https://shannon-explorer.somnia.network/address/0xFFFF7c37D382e17B88A4F92c363dE6511E9bDfEF) |
+
+Config: platform `0x037Bb9C718F3f7fe5eCBDB0b600D607b52706776`, subcommittee 3, per-agent reward
+0.1 STT → `requiredDeposit()` ≈ **0.33 STT per check** (caller-paid). Earlier redeploys are
+superseded (the iteration during the security review).
+
+**Live end-to-end verification (2026-06-02 → 03)** — four demo pacts of different kinds, each
+**2-of-2 multi-source CONFIRMED** by real consensus AI (a Web/parse check + a Text/LLM check),
+with per-check consensus receipts (validator count + median execution cost) recorded on-chain:
+
+| Pact | Kind | Claim | Sources (both confirmed) |
+|---|---|---|---|
+| #0 | Relief | Hurricane Katrina (Aug 2005) | Wikipedia (parse) + statement (LLM) |
+| #1 | Medical | Insulin treats diabetes | Wikipedia (parse) + statement (LLM) |
+| #2 | Fundraise | Ethereum = smart-contract chain | Wikipedia (parse) + statement (LLM) |
+| #3 | Medical + **yield** | Penicillin = antibiotic | Wikipedia (parse) + statement (LLM) |
+| #4 | Insurance | external task complete | JSON-API `fetchBool` (data feed) |
+
+Pact #3 opted into yield: principal 2 STT → after a reserve top-up, `yieldValue` = ~2.2 STT (+0.2);
+release pays principal + yield to the beneficiary. Pact #4 is resolved purely by the **JSON-API
+agent** (`fetchBool` over a live endpoint → `true` → Confirmed), so **all three Somnia agents
+(parse, JSON, LLM) are live-verified** end-to-end.
+
+Reproduce: `forge script script/DeployVault.s.sol --rpc-url shannon --broadcast --legacy --gas-estimate-multiplier 2000`,
+then create + fund a pact and call `requestResolution(pactId, checkIndex)` per check (≈0.33 STT each).
+
+---
+
 ### Identity layer (current) — hardened, reentrancy-guarded
 
 `<name>@asom` agents with ERC-6551 wallets. `register()` is now `nonReentrant` and
@@ -83,6 +121,29 @@ accept → submit → approve, worker `wkr-42a553@asom` (token 6):
 Reproduce: `PRIVATE_KEY=0x… tsx packages/cli/scripts/verify-coordination.mts`.
 
 ---
+
+### AI compute layer — LlmAgent + ParseAgent (pending deploy)
+
+The fundamental AI primitives built on `AgentCompute` (the distilled, hardened Somnia-Agents
+pattern + on-chain **consensus receipts**). `OracleAgent` (below) already covers the JSON agent;
+these add the LLM-inference and parse-website agents.
+
+| Contract | Somnia agent | Address |
+|---|---|---|
+| **LlmAgent** (classify / number) | LLM inference `12847293847561029384` ⚠️ experimental | _deploy via `script/DeployCompute.s.sol`_ |
+| **ParseAgent** (web extract) | parse-website `12875401142070969085` | _deploy via `script/DeployCompute.s.sol`_ |
+
+Deploy + wire:
+
+```bash
+PRIVATE_KEY=0x… forge script script/DeployCompute.s.sol:DeployCompute \
+  --rpc-url shannon --broadcast --slow --gas-estimate-multiplier 800
+# then set llmAgent / parseAgent in packages/sdk/src/addresses.ts and re-run `asom ai …`
+```
+
+After deploy, fund each contract above `requiredDeposit()` (read live) before the first request —
+the reward pot must clear the per-agent budget floor or the request `TimedOut`s. The LLM agent id
+is experimental: confirm it against `agents.somnia.network` before mainnet.
 
 ### OracleAgent (current) — hardened
 

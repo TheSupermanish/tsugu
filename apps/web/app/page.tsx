@@ -1,113 +1,120 @@
-"use client";
-
-import { useEffect, useState } from "react";
 import Link from "next/link";
-import { searchAgents, short, fmtStt, EXPLORER, type SearchResult } from "@/lib/api";
+import { loadPacts, type PactRow } from "@/lib/pacts";
+import { PactCard } from "@/components/PactCard";
+import { Seam } from "@/components/ui";
 
-const EXAMPLES = ["summarize my pdf", "translate to spanish", "price feed", "parse a website"];
+export const revalidate = 0;
 
-export default function Home() {
-  const [q, setQ] = useState("");
-  const [results, setResults] = useState<SearchResult[]>([]);
-  const [matched, setMatched] = useState<string[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [ran, setRan] = useState(false);
+const KINDS = [
+  { glyph: "🜂", label: "Relief" },
+  { glyph: "✛", label: "Medical" },
+  { glyph: "△", label: "Fundraise" },
+  { glyph: "◈", label: "Insurance" },
+  { glyph: "✶", label: "Custom" },
+];
 
-  async function run(query: string) {
-    setLoading(true);
-    setRan(true);
-    const { results, matchedCapabilities } = await searchAgents(query);
-    setResults(results);
-    setMatched(matchedCapabilities);
-    setLoading(false);
+const STEPS = [
+  {
+    n: "01",
+    title: "Fund",
+    body: "Anyone opens a Pact — a claim worth funding — and contributors escrow STT. The money is held by the contract, not a middleman.",
+  },
+  {
+    n: "02",
+    title: "Verify",
+    body: "Somnia's consensus AI fetches the real evidence from multiple independent sources and classifies it. A quorum must agree.",
+  },
+  {
+    n: "03",
+    title: "Release",
+    body: "Proven true → funds release to the beneficiary, no skim. Proven false → contributors refund. Every verdict is on-chain.",
+  },
+];
+
+export default async function Home() {
+  let rows: PactRow[] = [];
+  let loadError = false;
+  try {
+    rows = await loadPacts();
+  } catch {
+    loadError = true;
   }
 
-  useEffect(() => {
-    void run("");
-  }, []);
-
   return (
-    <main className="mx-auto max-w-3xl px-6 py-16">
-      <h1 className="text-4xl font-bold tracking-tight">
-        <span className="text-fuchsia-500">◆ asom</span> <span className="text-neutral-300">discover</span>
-      </h1>
-      <p className="mt-2 text-neutral-400">Find agents by what they do — then hire them.</p>
-
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          void run(q);
-        }}
-        className="mt-8 flex gap-2"
-      >
-        <input
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="e.g. summarize my pdf"
-          className="flex-1 rounded-lg border border-neutral-800 bg-neutral-900 px-4 py-3 outline-none focus:border-fuchsia-600"
-        />
-        <button className="rounded-lg bg-fuchsia-600 px-5 py-3 font-medium hover:bg-fuchsia-500">Search</button>
-      </form>
-
-      <div className="mt-3 flex flex-wrap gap-2 text-sm">
-        {EXAMPLES.map((ex) => (
-          <button
-            key={ex}
-            onClick={() => {
-              setQ(ex);
-              void run(ex);
-            }}
-            className="rounded-full border border-neutral-800 px-3 py-1 text-neutral-400 hover:border-fuchsia-700 hover:text-neutral-200"
-          >
-            {ex}
-          </button>
-        ))}
-      </div>
-
-      {matched.length > 0 && (
-        <p className="mt-6 text-sm text-neutral-500">
-          matched capability: {matched.map((m) => (
-            <span key={m} className="ml-1 rounded bg-neutral-800 px-1.5 py-0.5 text-cyan-300">{m}</span>
-          ))}
+    <div className="mx-auto max-w-6xl px-6">
+      {/* Hero */}
+      <section className="relative pt-20 pb-16 sm:pt-28">
+        <div className="animate-fade-up">
+          <span className="chip border-gold-700/40 bg-gold-500/5 text-gold-300">
+            <span className="h-1.5 w-1.5 rounded-full bg-gold-400" /> Verified by Somnia consensus AI
+          </span>
+        </div>
+        <h1 className="mt-6 max-w-3xl animate-fade-up animate-delay-100 text-5xl font-semibold leading-[1.05] sm:text-7xl">
+          <span className="text-gold">Proof</span>,
+          <br className="hidden sm:block" /> not{" "}
+          <span className="text-porcelain-faint line-through decoration-rust/60 decoration-2">promises</span>.
+        </h1>
+        <p className="mt-6 max-w-xl animate-fade-up animate-delay-200 text-lg leading-relaxed text-porcelain-muted">
+          Online giving is broken by trust. Tsugu mends it: fund anything worth funding, the money is held
+          safe, and it&apos;s released only when the claim is proven true — by AI that reads the real evidence,
+          from multiple sources, in the open.
         </p>
-      )}
+        <div className="mt-8 flex animate-fade-up animate-delay-300 flex-wrap items-center gap-3">
+          <Link href="/create" className="btn-gold">Start a pact</Link>
+          <a href="#pacts" className="btn-ghost">See live pacts</a>
+        </div>
+        <div className="mt-10 flex flex-wrap gap-2.5">
+          {KINDS.map((k) => (
+            <span key={k.label} className="chip border-ink-700 bg-ink-900/60 text-porcelain-dim">
+              <span className="text-gold-400">{k.glyph}</span> {k.label}
+            </span>
+          ))}
+        </div>
+      </section>
 
-      <div className="mt-6 space-y-3">
-        {loading && <p className="text-neutral-500">searching…</p>}
-        {!loading && ran && results.length === 0 && <p className="text-neutral-500">No agents found.</p>}
-        {results.map(({ agent, score }) => (
-          <Link
-            key={agent.tokenId}
-            href={`/agent/${agent.name}`}
-            className="block rounded-xl border border-neutral-800 bg-neutral-900/50 p-5 transition hover:border-fuchsia-700"
-          >
-            <div className="flex items-center justify-between">
-              <span className="text-lg font-semibold">
-                {agent.name}
-                <span className="text-neutral-500">@asom</span>
-              </span>
-              <span className="text-xs text-neutral-600">
-                #{agent.tokenId} · score {score}
-              </span>
-            </div>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {agent.capabilities.map((c) => (
-                <span key={c} className="rounded-full bg-cyan-950 px-2.5 py-1 text-xs text-cyan-300">
-                  {c.startsWith("0x") ? short(c) : c}
-                </span>
-              ))}
-            </div>
-            <div className="mt-3 text-sm text-neutral-400">
-              wallet <span className="text-cyan-400">{short(agent.account)}</span>
-              {Number(agent.pricePerCall) > 0 && <> · {fmtStt(agent.pricePerCall)} STT/call</>}
-            </div>
-          </Link>
-        ))}
-      </div>
+      <Seam />
 
-      <p className="mt-12 text-center text-xs text-neutral-600">
-        on-chain CapabilityRegistry on Somnia Shannon · <a className="hover:underline" href={EXPLORER} target="_blank">explorer</a>
-      </p>
-    </main>
+      {/* How it works */}
+      <section className="py-16">
+        <h2 className="text-sm font-medium uppercase tracking-[0.2em] text-porcelain-dim">How a pact moves</h2>
+        <div className="mt-8 grid gap-5 md:grid-cols-3">
+          {STEPS.map((s) => (
+            <div key={s.n} className="panel p-6">
+              <div className="font-mono text-sm text-gold-500">{s.n}</div>
+              <h3 className="mt-2 text-2xl">{s.title}</h3>
+              <p className="mt-2 text-sm leading-relaxed text-porcelain-muted">{s.body}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <Seam />
+
+      {/* Live pacts */}
+      <section id="pacts" className="py-16">
+        <div className="flex items-end justify-between">
+          <div>
+            <h2 className="text-3xl">Live pacts</h2>
+            <p className="mt-1 text-sm text-porcelain-dim">Read straight from the Vault on Somnia Shannon — no indexer.</p>
+          </div>
+          <Link href="/create" className="btn-ghost hidden sm:inline-flex">Start a pact</Link>
+        </div>
+
+        {loadError ? (
+          <p className="mt-10 text-sm text-rust">Couldn&apos;t reach Somnia Shannon right now. Refresh to retry.</p>
+        ) : rows.length === 0 ? (
+          <div className="panel mt-8 p-12 text-center">
+            <p className="text-porcelain-muted">No pacts yet. Be the first to fund something worth proving.</p>
+            <Link href="/create" className="btn-gold mt-5">Start the first pact</Link>
+          </div>
+        ) : (
+          <div className="mt-8 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+            {rows.map((r) => (
+              <PactCard key={r.id} id={r.id} pact={r.pact} />
+            ))}
+          </div>
+        )}
+      </section>
+    </div>
   );
 }

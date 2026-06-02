@@ -367,3 +367,250 @@ export const agentAccountAbi = [
     outputs: [{ name: "magicValue", type: "bytes4" }],
   },
 ] as const;
+
+/// Somnia AI compute primitives (AgentCompute subclasses). Includes the shared
+/// base surface (requiredDeposit, consensus receipt, pendingRequests) plus each
+/// agent's request/result methods. See packages/contracts/src/agents.
+
+/// Fields shared by every AgentCompute primitive (deposit math + consensus receipt).
+const computeBase = [
+  {
+    type: "function",
+    name: "requiredDeposit",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "owner",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "address" }],
+  },
+  {
+    type: "function",
+    name: "agentId",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "pendingRequests",
+    stateMutability: "view",
+    inputs: [{ name: "", type: "uint256" }],
+    outputs: [{ name: "", type: "bool" }],
+  },
+  {
+    type: "function",
+    name: "consensusOf",
+    stateMutability: "view",
+    inputs: [{ name: "requestId", type: "uint256" }],
+    outputs: [
+      {
+        name: "",
+        type: "tuple",
+        components: [
+          { name: "validators", type: "uint64" },
+          { name: "finalizedAt", type: "uint64" },
+          { name: "receiptId", type: "uint256" },
+          { name: "executionCost", type: "uint256" },
+        ],
+      },
+    ],
+  },
+  {
+    type: "event",
+    name: "RequestDispatched",
+    inputs: [
+      { name: "requestId", type: "uint256", indexed: true },
+      { name: "agentId", type: "uint256", indexed: true },
+    ],
+  },
+  {
+    type: "event",
+    name: "ConsensusReached",
+    inputs: [
+      { name: "requestId", type: "uint256", indexed: true },
+      { name: "validators", type: "uint64", indexed: false },
+      { name: "receiptId", type: "uint256", indexed: false },
+      { name: "medianExecutionCost", type: "uint256", indexed: false },
+    ],
+  },
+  {
+    type: "event",
+    name: "RequestFailed",
+    inputs: [
+      { name: "requestId", type: "uint256", indexed: true },
+      { name: "status", type: "uint8", indexed: false },
+    ],
+  },
+] as const;
+
+export const llmAgentAbi = [
+  ...computeBase,
+  {
+    type: "function",
+    name: "requestClassification",
+    stateMutability: "payable",
+    inputs: [
+      { name: "prompt", type: "string" },
+      { name: "system", type: "string" },
+      { name: "allowedValues", type: "string[]" },
+    ],
+    outputs: [{ name: "requestId", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "requestNumber",
+    stateMutability: "payable",
+    inputs: [
+      { name: "prompt", type: "string" },
+      { name: "system", type: "string" },
+      { name: "min", type: "int256" },
+      { name: "max", type: "int256" },
+    ],
+    outputs: [{ name: "requestId", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "verdicts",
+    stateMutability: "view",
+    inputs: [{ name: "", type: "uint256" }],
+    outputs: [{ name: "", type: "string" }],
+  },
+  {
+    type: "function",
+    name: "numbers",
+    stateMutability: "view",
+    inputs: [{ name: "", type: "uint256" }],
+    outputs: [{ name: "", type: "int256" }],
+  },
+  {
+    type: "function",
+    name: "numberReady",
+    stateMutability: "view",
+    inputs: [{ name: "", type: "uint256" }],
+    outputs: [{ name: "", type: "bool" }],
+  },
+  {
+    type: "function",
+    name: "lastVerdict",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "string" }],
+  },
+  {
+    type: "event",
+    name: "ClassificationReceived",
+    inputs: [
+      { name: "requestId", type: "uint256", indexed: true },
+      { name: "verdict", type: "string", indexed: false },
+    ],
+  },
+  {
+    type: "event",
+    name: "NumberReceived",
+    inputs: [
+      { name: "requestId", type: "uint256", indexed: true },
+      { name: "value", type: "int256", indexed: false },
+    ],
+  },
+] as const;
+
+export const parseAgentAbi = [
+  ...computeBase,
+  {
+    type: "function",
+    name: "requestExtract",
+    stateMutability: "payable",
+    inputs: [
+      {
+        name: "p",
+        type: "tuple",
+        components: [
+          { name: "key", type: "string" },
+          { name: "description", type: "string" },
+          { name: "options", type: "string[]" },
+          { name: "prompt", type: "string" },
+          { name: "url", type: "string" },
+          { name: "resolveUrl", type: "bool" },
+          { name: "numPages", type: "uint8" },
+          { name: "confidenceThreshold", type: "uint8" },
+        ],
+      },
+    ],
+    outputs: [{ name: "requestId", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "extractions",
+    stateMutability: "view",
+    inputs: [{ name: "", type: "uint256" }],
+    outputs: [{ name: "", type: "string" }],
+  },
+  {
+    type: "function",
+    name: "extractionReady",
+    stateMutability: "view",
+    inputs: [{ name: "", type: "uint256" }],
+    outputs: [{ name: "", type: "bool" }],
+  },
+  {
+    type: "function",
+    name: "lastExtraction",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "string" }],
+  },
+  {
+    type: "event",
+    name: "ExtractionReceived",
+    inputs: [
+      { name: "requestId", type: "uint256", indexed: true },
+      { name: "value", type: "string", indexed: false },
+    ],
+  },
+] as const;
+
+/// Somnia's mainnet AgentRegistry — the enumerable, curated catalog of the platform's
+/// base AI agents. Read-only and OPTIONAL: it is mainnet-only (empty bytecode on
+/// Shannon) and undocumented, so the SDK falls back to the hardcoded SomniaAgentIds on
+/// testnet. See docs/SOMNIA_AI.md §3.
+export const somniaAgentRegistryAbi = [
+  {
+    type: "function",
+    name: "agentCount",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "getAllAgents",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256[]" }],
+  },
+  {
+    type: "function",
+    name: "getAgent",
+    stateMutability: "view",
+    inputs: [{ name: "agentId", type: "uint256" }],
+    // Returns a SINGLE struct, not three flat values. Verified live against the mainnet
+    // registry 0xaD3101… — a flat (uint256,string,string) decode overruns (missing the
+    // outer tuple offset). Keep this a tuple.
+    outputs: [
+      {
+        name: "agent",
+        type: "tuple",
+        components: [
+          { name: "id", type: "uint256" },
+          { name: "metadataJsonUri", type: "string" },
+          { name: "tarUri", type: "string" },
+        ],
+      },
+    ],
+  },
+] as const;

@@ -1,7 +1,65 @@
 # Changelog
 
-All notable changes to asom are documented here. Packages are versioned in lockstep.
+All notable changes to Tsugu are documented here. Packages are versioned in lockstep.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
+
+## [Unreleased]
+
+**Tsugu** — the pivot to *money that moves on proof, not promises*: an AI-verified conditional
+escrow, built on the fundamental AI layer below.
+
+### Added — Tsugu
+
+- **`Vault is AgentCompute`** (`src/tsugu/Vault.sol`) — a permissionless registry of **Pacts**
+  (AI-verified conditional escrows). Multi-source **M-of-N quorum**: a pact confirms only when M
+  independent checks agree, denies once quorum is unreachable. Three `ClaimType`s use all three
+  Somnia agents (Web→parse, Data→JSON, Text→LLM). `release` (no skim) / `refund` / `markExpired`;
+  escrow ring-fenced (`totalEscrow`), CEI + `nonReentrant`, **pull-payment** release; deadline →
+  permissionless refund (funds never lock).
+- **Opt-in yield** behind a pluggable `IYieldStrategy` (off by default; `DemoYieldStrategy` is the
+  testnet stand-in). Release pays principal + yield; refund pays principal + pro-rata yield.
+- **Security review** (multi-agent adversarial + Slither): 13 findings incl. a critical ERC-4626
+  inflation attack on the yield strategy — all fixed with regression tests. Suite: **182**.
+- **Web** rebuilt as Tsugu (kintsugi gold-seam): home gallery, create (multi-source + quorum +
+  yield toggle), pact detail (live verdict + per-source consensus receipts + fund/verify/release/
+  refund). `script/DeployVault.s.sol`; SDK exports the Vault ABI/address/enums.
+
+### Added — fundamental AI layer
+
+- **Contracts — `AgentCompute` (abstract base)** distilling `OracleAgent`'s hardened
+  Somnia-Agents pattern (deposit math, the four callback guards, overpayment refund,
+  reentrancy, `receive()` rebates) into one audited base, plus two new primitives on it:
+  - **`LlmAgent`** — consensus LLM inference: `requestClassification` (constrained verdict —
+    an advisory referee, e.g. `accept`/`reject`) and `requestNumber` (bounded score).
+  - **`ParseAgent`** — consensus website extraction (`requestExtract`).
+  - **Consensus receipts**: every successful request now records `{validators, finalizedAt,
+    receiptId, executionCost(median)}` and emits `ConsensusReached` — the Somnia receipt data
+    was previously discarded. Read via `receipts(id)` / `consensusOf(id)`.
+  - `script/DeployCompute.s.sol`; +27 contract tests (130 total).
+- **SDK** — browser-wallet signing (`new AsomClient({ walletClient })` for self-custodial UI
+  writes); `aiClassify` / `aiNumber` / `aiExtract` + `waitForAiResult` + `aiConsensus`;
+  `resolveSomniaAgents()` (reads Somnia's mainnet AgentRegistry, falls back to constants on
+  testnet — the two-store resolver) and `somniaRequestDeposit()`.
+- **CLI** — `asom ai classify|number|extract|judge` and `asom somnia` (lists base agents +
+  their resolution source).
+- **Web** — a write-capable console on `apps/web` (wagmi + injected wallet): **Create**
+  (AI suggests a capability → mint + advertise), **Discover**, **Tasks** (post → accept →
+  submit → approve, with "Ask AI to judge"), and **Workflows** (chained consensus-AI steps).
+- **One app** — folded the standalone `@asom/api` Express server into the web app as Next
+  route handlers (`apps/web/app/api/{agents,agents/[name],capabilities,health}`), backed by a
+  shared TTL-cached `AgentDirectory` over `@asom/discover`. The console now serves its own
+  discovery API on the same origin (relative `/api/*`, no `NEXT_PUBLIC_API_URL`); `apps/api`
+  deleted. SDK / `@asom/discover` / contracts remain the shared engine.
+
+### Notes
+
+- The Somnia LLM agent id + `inferString` ABI are **confirmed on the official console**
+  (agents.somnia.network → LLM Inference: id `12847293847561029384`, signature
+  `inferString(string,string,bool,string[])`, 0.24 SOMI deposit) — flipped from *experimental*
+  to *id-verified* across `somnia.ts` / `SomniaAgents.sol` / `docs/SOMNIA_AI.md`. A wrong live
+  id/ABI still degrades to `TimedOut` (handled) — it never corrupts stored state.
+- The deployed `TaskBoard` is **unchanged**: AI judging is **advisory** (the poster still
+  approves/refunds), so no redeploy and no new trust assumption.
 
 ## [0.1.0] — 2026-06-02
 

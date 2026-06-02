@@ -1,8 +1,8 @@
 {
-  "name": "asom",
+  "name": "tsugu",
   "version": "0.1.0",
   "private": true,
-  "description": "asom — the agentic layer for the agent economy on Somnia",
+  "description": "Tsugu — money that moves on proof, not promises: AI-verified conditional escrow on Somnia",
   "packageManager": "pnpm@9.12.0",
   "engines": {
     "node": ">=20",

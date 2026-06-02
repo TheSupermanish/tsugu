@@ -100,3 +100,28 @@ describe("parseStt", () => {
     expect(parseStt("  0.05  ")).toBe(parseEther("0.05"));
   });
 });
+
+describe("Somnia base-agent resolution + AI compute (no chain)", () => {
+  it("falls back to hardcoded constants on testnet (Somnia registry not deployed there)", async () => {
+    const c = new AsomClient(); // Shannon 50312 — no Somnia AgentRegistry
+    const agents = await c.resolveSomniaAgents();
+    expect(agents.length).toBe(3);
+    expect(agents.every((a) => a.source === "constants")).toBe(true);
+    const caps = agents.map((a) => a.capability);
+    expect(caps).toContain("somnia.json-fetch");
+    expect(caps).toContain("somnia.llm-inference");
+    expect(caps).toContain("somnia.parse-website");
+  });
+
+  it("guards AI calls when no compute contract is configured", async () => {
+    const c = new AsomClient(); // Shannon deployment has no llmAgent/parseAgent yet
+    await expect(c.aiRequiredDeposit("classify")).rejects.toThrow(/no LlmAgent/);
+    await expect(c.aiRequiredDeposit("extract")).rejects.toThrow(/no ParseAgent/);
+  });
+
+  it("accepts an injected account (browser-wallet shape) without a private key", () => {
+    const account = { address: "0x0000000000000000000000000000000000001234", type: "json-rpc" } as never;
+    const c = new AsomClient({ account });
+    expect(c.signerAddress).toBe("0x0000000000000000000000000000000000001234");
+  });
+});

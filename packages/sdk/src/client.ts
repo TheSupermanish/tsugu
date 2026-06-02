@@ -20,8 +20,18 @@ import {
 import { privateKeyToAccount } from "viem/accounts";
 import { shannon } from "./chain.js";
 import { deployments } from "./addresses.js";
-import { agentRegistryAbi, agentNftAbi, agentAccountAbi, capabilityRegistryAbi, taskBoardAbi } from "./abis.js";
+import {
+  agentRegistryAbi,
+  agentNftAbi,
+  agentAccountAbi,
+  capabilityRegistryAbi,
+  taskBoardAbi,
+  llmAgentAbi,
+  parseAgentAbi,
+  somniaAgentRegistryAbi,
+} from "./abis.js";
 import { validateName, parseStt } from "./validate.js";
+import { somniaAgents, somniaPlatform, somniaAgentRegistry, type SomniaAgentInfo } from "./somnia.js";
 
 /** Capability tag = keccak256 of the UTF-8 capability name (e.g. "llm.summarize"),
  *  matching the on-chain bytes32 tags. */
@@ -49,6 +59,10 @@ export interface AsomAddresses {
   capabilityRegistry?: Address;
   /** Coordination layer — optional. */
   taskBoard?: Address;
+  /** AI compute primitives — optional (LlmAgent / ParseAgent / OracleAgent). */
+  llmAgent?: Address;
+  parseAgent?: Address;
+  oracleAgent?: Address;
 }
 
 /** A coordination task. `status`: 0 None,1 Open,2 Accepted,3 Submitted,4 Approved,5 Refunded. */
@@ -64,6 +78,32 @@ export interface Task {
   resultURI: string;
 }
 
+/** The three AI compute primitives. classify/number → LlmAgent; extract → ParseAgent. */
+export type AiKind = "classify" | "number" | "extract";
+
+/** Parameters for a parse-website extraction (mirrors ParseAgent.ExtractParams). */
+export interface ExtractParams {
+  key: string;
+  description: string;
+  options?: string[];
+  prompt: string;
+  url: string;
+  resolveUrl?: boolean;
+  numPages?: bigint | number;
+  confidenceThreshold?: bigint | number;
+}
+
+/** A resolved AI result once the consensus callback has landed. */
+export interface AiResult {
+  /** True if consensus succeeded; false if the request Failed / TimedOut. */
+  ok: boolean;
+  kind: AiKind;
+  /** Decoded value — a verdict/extraction string, or a bigint for `number`. Unset on failure. */
+  value?: string | bigint;
+  /** Consensus receipt: how many validators backed it + median execution cost. */
+  receipt?: { validators: number; finalizedAt: number; receiptId: bigint; executionCost: bigint };
+}
+
 export interface AsomClientOptions {
   /** Target chain. Defaults to Somnia Shannon. Pass a custom chain (e.g. anvil) for tests/forks. */
   chain?: Chain;
@@ -71,8 +111,14 @@ export interface AsomClientOptions {
   rpcUrl?: string;
   /** Multiple RPC URLs for a viem fallback transport (resilience). Takes precedence over rpcUrl. */
   rpcUrls?: string[];
-  /** 0x-prefixed private key. Required only for write operations. */
+  /** 0x-prefixed private key. Required only for write operations (server/CLI signing). */
   privateKey?: Hex;
+  /** An externally-supplied viem WalletClient (e.g. a browser/injected wallet via wagmi).
+   *  Use this INSTEAD of `privateKey` for self-custodial signing in the UI. */
+  walletClient?: WalletClient;
+  /** The signing account. Defaults to `walletClient.account`. Required if a walletClient
+   *  without a bound account is supplied. Ignored when `privateKey` is set. */
+  account?: Account;
   /** Address override. Defaults to the known deployment for `chain.id`. */
   addresses?: AsomAddresses;
   /** Lower-bound block for event scans (hasEverOwned). Defaults to the known deploy block, else 0. */
@@ -143,6 +189,9 @@ export class AsomClient {
       agentAccount: addresses.agentAccount,
       capabilityRegistry: addresses.capabilityRegistry,
       taskBoard: addresses.taskBoard,
+      llmAgent: addresses.llmAgent,
+      parseAgent: addresses.parseAgent,
+      oracleAgent: addresses.oracleAgent,
     };
     this.deployBlock = opts.deployBlock ?? dep?.deployBlock ?? 0n;
 
@@ -159,6 +208,18 @@ export class AsomClient {
       }
       this.account = privateKeyToAccount(opts.privateKey);
       this.walletClient = createWalletClient({ account: this.account, chain: this.chain, transport });
+    } else if (opts.walletClient) {
+      // Externally-supplied signer (e.g. a browser/injected wallet). Used directly for
+      // writes; reads/simulations still go through our publicClient with `this.account`.
+      this.walletClient = opts.walletClient;
+      const acct = opts.account ?? opts.walletClient.account;
+      if (!acct) {
+        throw new Error("asom: a walletClient without a bound account requires an explicit `account`");
+      }
+      this.account = acct;
+    } else if (opts.account) {
+      // Account only (e.g. read-with-identity); writes will still require a walletClient.
+      this.account = opts.account;
     }
   }
 
@@ -708,6 +769,277 @@ export class AsomClient {
       specURI: t.specURI,
       resultURI: t.resultURI,
     };
+  }
+
+  /** The id the next posted task will get — i.e. (tasks posted so far) + 1. Enumerate
+   *  the board with `getTask(1..nextTaskId()-1)`. */
+  async nextTaskId(): Promise<bigint> {
+    return this.publicClient.readContract({
+      address: this.boardAddr(),
+      abi: taskBoardAbi,
+      functionName: "nextTaskId",
+    });
+  }
+
+  /** An agent's ERC-6551 wallet address from its tokenId (deterministic; the same
+   *  address `register` deployed). Lets a caller detect that a task's `poster` IS an
+   *  agent's wallet — i.e. an agent that hired another agent. */
+  async agentWallet(tokenId: bigint): Promise<Address> {
+    const wallet = await this.publicClient.readContract({
+      address: this.addresses.agentRegistry,
+      abi: agentRegistryAbi,
+      functionName: "previewAccount",
+      args: [tokenId],
+    });
+    return getAddress(wallet);
+  }
+
+  // --- AI compute (LlmAgent / ParseAgent — the fundamental Somnia AI primitives) ---
+
+  private llmAddr(): Address {
+    const a = this.addresses.llmAgent;
+    if (!a) throw new Error("asom: no LlmAgent deployed for this chain; pass addresses.llmAgent");
+    return a;
+  }
+
+  private parseAddr(): Address {
+    const a = this.addresses.parseAgent;
+    if (!a) throw new Error("asom: no ParseAgent deployed for this chain; pass addresses.parseAgent");
+    return a;
+  }
+
+  private aiTarget(kind: AiKind): { address: Address; abi: typeof llmAgentAbi | typeof parseAgentAbi } {
+    return kind === "extract"
+      ? { address: this.parseAddr(), abi: parseAgentAbi }
+      : { address: this.llmAddr(), abi: llmAgentAbi };
+  }
+
+  /** The live deposit (wei) a single AI request needs — read on-chain, never hardcoded
+   *  (it depends on the platform floor + the contract's per-agent reward × subcommittee). */
+  async aiRequiredDeposit(kind: AiKind): Promise<bigint> {
+    const { address, abi } = this.aiTarget(kind);
+    return this.publicClient.readContract({ address, abi, functionName: "requiredDeposit" });
+  }
+
+  private async dispatchAi(
+    kind: AiKind,
+    functionName: "requestClassification" | "requestNumber" | "requestExtract",
+    args: readonly unknown[],
+  ): Promise<{ requestId: bigint; txHash: Hash }> {
+    const { account } = this.requireSigner(functionName);
+    const { address, abi } = this.aiTarget(kind);
+    const deposit = await this.aiRequiredDeposit(kind);
+    const { request } = await this.publicClient.simulateContract({
+      address,
+      abi,
+      functionName,
+      // viem can't narrow the union of the two ABIs here; the abi/args pair is correct.
+      args: args as never,
+      value: deposit,
+      account,
+      gas: GAS.coord,
+    });
+    const receipt = await this.finishWriteReceipt(request, functionName);
+    const events = parseEventLogs({ abi, eventName: "RequestDispatched", logs: receipt.logs });
+    const ev = events.find((e) => getAddress(e.address) === getAddress(address));
+    if (!ev) throw new Error(`asom: ${functionName} landed but RequestDispatched log was missing`);
+    return { requestId: (ev.args as { requestId: bigint }).requestId, txHash: receipt.transactionHash };
+  }
+
+  /** Ask the consensus LLM to classify `prompt` into one of `allowedValues`
+   *  (e.g. ["accept","reject"] — an advisory, hard-to-game referee). */
+  async aiClassify(
+    prompt: string,
+    allowedValues: string[],
+    opts: { system?: string } = {},
+  ): Promise<{ requestId: bigint; txHash: Hash }> {
+    return this.dispatchAi("classify", "requestClassification", [prompt, opts.system ?? "", allowedValues]);
+  }
+
+  /** Ask the consensus LLM to infer a bounded integer in [min, max]. */
+  async aiNumber(
+    prompt: string,
+    min: bigint,
+    max: bigint,
+    opts: { system?: string } = {},
+  ): Promise<{ requestId: bigint; txHash: Hash }> {
+    return this.dispatchAi("number", "requestNumber", [prompt, opts.system ?? "", min, max]);
+  }
+
+  /** Ask the consensus parse-website agent to extract a field from a page. */
+  async aiExtract(p: ExtractParams): Promise<{ requestId: bigint; txHash: Hash }> {
+    const tuple = {
+      key: p.key,
+      description: p.description,
+      options: p.options ?? [],
+      prompt: p.prompt,
+      url: p.url,
+      resolveUrl: p.resolveUrl ?? false,
+      numPages: BigInt(p.numPages ?? 1),
+      confidenceThreshold: BigInt(p.confidenceThreshold ?? 0),
+    };
+    return this.dispatchAi("extract", "requestExtract", [tuple]);
+  }
+
+  /** True while a dispatched request is still awaiting its consensus callback. */
+  async aiPending(kind: AiKind, requestId: bigint): Promise<boolean> {
+    const { address, abi } = this.aiTarget(kind);
+    return this.publicClient.readContract({ address, abi, functionName: "pendingRequests", args: [requestId] });
+  }
+
+  /** The consensus receipt for a finalized request (validators + median cost). */
+  async aiConsensus(
+    kind: AiKind,
+    requestId: bigint,
+  ): Promise<{ validators: number; finalizedAt: number; receiptId: bigint; executionCost: bigint }> {
+    const { address, abi } = this.aiTarget(kind);
+    const r = await this.publicClient.readContract({ address, abi, functionName: "consensusOf", args: [requestId] });
+    return {
+      validators: Number(r.validators),
+      finalizedAt: Number(r.finalizedAt),
+      receiptId: r.receiptId,
+      executionCost: r.executionCost,
+    };
+  }
+
+  private async readAiValue(kind: AiKind, requestId: bigint): Promise<string | bigint | undefined> {
+    if (kind === "classify") {
+      const v = await this.publicClient.readContract({
+        address: this.llmAddr(),
+        abi: llmAgentAbi,
+        functionName: "verdicts",
+        args: [requestId],
+      });
+      return v.length > 0 ? v : undefined;
+    }
+    if (kind === "number") {
+      const ready = await this.publicClient.readContract({
+        address: this.llmAddr(),
+        abi: llmAgentAbi,
+        functionName: "numberReady",
+        args: [requestId],
+      });
+      if (!ready) return undefined;
+      return this.publicClient.readContract({
+        address: this.llmAddr(),
+        abi: llmAgentAbi,
+        functionName: "numbers",
+        args: [requestId],
+      });
+    }
+    const ready = await this.publicClient.readContract({
+      address: this.parseAddr(),
+      abi: parseAgentAbi,
+      functionName: "extractionReady",
+      args: [requestId],
+    });
+    if (!ready) return undefined;
+    return this.publicClient.readContract({
+      address: this.parseAddr(),
+      abi: parseAgentAbi,
+      functionName: "extractions",
+      args: [requestId],
+    });
+  }
+
+  /**
+   * Poll until a dispatched AI request finalizes (the consensus callback lands in a
+   * LATER block — this is not synchronous). Resolves with the decoded value + receipt
+   * on success, or `{ ok: false }` if it Failed / TimedOut. Throws on timeout.
+   */
+  async waitForAiResult(
+    kind: AiKind,
+    requestId: bigint,
+    opts: { timeoutMs?: number; pollMs?: number } = {},
+  ): Promise<AiResult> {
+    const timeoutMs = opts.timeoutMs ?? 120_000;
+    const pollMs = opts.pollMs ?? 3_000;
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const pending = await this.aiPending(kind, requestId);
+      if (!pending) {
+        const receipt = await this.aiConsensus(kind, requestId);
+        if (receipt.validators === 0) return { ok: false, kind }; // Failed / TimedOut
+        const value = await this.readAiValue(kind, requestId);
+        return { ok: true, kind, value, receipt };
+      }
+      if (Date.now() > deadline) {
+        throw new Error(`asom: AI request ${requestId} (${kind}) did not finalize within ${timeoutMs}ms`);
+      }
+      await new Promise((r) => setTimeout(r, pollMs));
+    }
+  }
+
+  // --- Somnia base-agent resolution (the registry question) ----------------
+
+  /** The live platform deposit floor (wei) for one Somnia Agents request, read on-chain.
+   *  NB: the platform read is precompile-backed — it works on a live RPC but reverts
+   *  inside forge simulation, so always read it here (off-chain), never hardcode it. */
+  async somniaRequestDeposit(): Promise<bigint> {
+    const platform = somniaPlatform[this.chainId];
+    if (!platform) throw new Error(`asom: no Somnia Agents platform known for chain ${this.chainId}`);
+    return this.publicClient.readContract({
+      address: platform,
+      abi: [
+        {
+          type: "function",
+          name: "getRequestDeposit",
+          stateMutability: "view",
+          inputs: [],
+          outputs: [{ name: "", type: "uint256" }],
+        },
+      ] as const,
+      functionName: "getRequestDeposit",
+    });
+  }
+
+  /**
+   * Resolve Somnia's base AI agents. On a network where Somnia's enumerable
+   * AgentRegistry is deployed (mainnet) this READS it (`getAllAgents` + `getAgent`,
+   * with metadata URIs). On testnet — where that registry has empty bytecode — it
+   * falls back to the hardcoded canonical ids (the documented two-store resolver
+   * pattern). `source` on each entry tells you which backed it.
+   */
+  async resolveSomniaAgents(): Promise<SomniaAgentInfo[]> {
+    const registry = somniaAgentRegistry[this.chainId];
+    if (registry) {
+      try {
+        const ids = await this.publicClient.readContract({
+          address: registry,
+          abi: somniaAgentRegistryAbi,
+          functionName: "getAllAgents",
+        });
+        const known = Object.values(somniaAgents);
+        return await Promise.all(
+          ids.map(async (id) => {
+            const agent = await this.publicClient.readContract({
+              address: registry,
+              abi: somniaAgentRegistryAbi,
+              functionName: "getAgent",
+              args: [id],
+            });
+            const { metadataJsonUri, tarUri } = agent;
+            const match = known.find((a) => a.id === id);
+            return {
+              id,
+              capability: match?.capability,
+              status: match?.status,
+              metadataJsonUri,
+              tarUri,
+              source: "registry" as const,
+            };
+          }),
+        );
+      } catch {
+        // Registry unreachable/upgraded — fall through to constants rather than throw.
+      }
+    }
+    return Object.values(somniaAgents).map((a) => ({
+      id: a.id,
+      capability: a.capability,
+      status: a.status,
+      source: "constants" as const,
+    }));
   }
 
   /** Explorer URL for an address or tx hash. Empty string if the chain has no explorer. */

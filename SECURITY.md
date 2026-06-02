@@ -40,11 +40,26 @@ no migration. `resolve()` always reports the live owner.
 - **Permissionless account creation is safe.** Anyone can deploy the counterfactual
   TBA for any token; doing so grants no control — the binding is read from the
   account's own bytecode footer, and only the NFT owner can operate it.
-- **Somnia Agents wiring.** `OracleAgent` satisfies the four canonical pitfalls:
-  deposit = `getRequestDeposit()` + reward pot; `receive()` accepts rebates;
-  `handleResponse` is gated on `msg.sender == platform` and a known `requestId`;
-  and `ResponseStatus` is checked before any `abi.decode`. A non-owner's
-  overpayment is refunded rather than trapped.
+- **Somnia Agents wiring.** `OracleAgent` and the `AgentCompute` base satisfy the four
+  canonical pitfalls: deposit = `getRequestDeposit()` + reward pot; `receive()` accepts
+  rebates; `handleResponse` is gated on `msg.sender == platform` and a known `requestId`;
+  and `ResponseStatus` is checked before any `abi.decode`. A non-owner's overpayment is
+  refunded rather than trapped. `AgentCompute._dispatch` is `nonReentrant` and subclass
+  entrypoints add no second guard (a double lock would revert). Regression-tested in
+  `test/AgentCompute.t.sol` (incl. a refund-reentrancy attacker).
+- **AI compute primitives (`LlmAgent` / `ParseAgent`).** Caller-pays funding (non-owners
+  forward `≥ requiredDeposit()`, overpay refunded) prevents draining a contract's working
+  capital. A successful callback records a **consensus receipt** (validator count + median
+  execution cost) before the subclass decodes — so a result's consensus backing is auditable.
+  A `Failed`/`TimedOut` callback decodes nothing and leaves no poisoned state (`numberReady` /
+  `extractionReady` distinguish a real `0`/`""` from "no result"). The **LLM agent id is
+  experimental**: a wrong live id/ABI degrades to `TimedOut`, never to a corrupted verdict.
+- **AI-judged settlement is advisory.** The LLM "accept/reject" verdict (`asom ai judge`,
+  the console's "Ask AI to judge") is surfaced to the **poster**, who still calls
+  `approveTask`/`refund`. The deployed `TaskBoard` is unchanged and grants no contract
+  unilateral payout authority — there is no new trust assumption from AI judging.
+- **Browser-wallet signing.** The web console builds `AsomClient` from an injected viem
+  `WalletClient`; asom holds no key and every state change is signed by the user's own wallet.
 
 ### Documented residual risks (by design, on testnet)
 

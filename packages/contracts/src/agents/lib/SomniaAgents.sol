@@ -62,9 +62,11 @@ interface IJsonApiAgent {
     function fetchBool(string calldata url, string calldata selector) external returns (bool);
 }
 
-/// @dev Somnia LLM inference agent (Qwen3-30B, deterministic temp=0). Signatures per
-///      docs.somnia.network/agents/llm-inference — VERIFY against the live agent ABI
-///      before mainnet (the agent ID itself is currently unconfirmed; see SomniaAgentIds).
+/// @dev Somnia LLM inference agent (Qwen3-30B, deterministic temp=0). id + inferString
+///      ABI confirmed on the official Somnia console (agents.somnia.network → LLM
+///      Inference): same id as SomniaAgentIds.LLM_INFERENCE, signature
+///      `inferString(string,string,bool,string[])`, 0.24 SOMI deposit. Console also lists
+///      inferChat/inferToolsChat (not wrapped). Confirm inferNumber's ABI in a live round.
 interface ILlmAgent {
     function inferString(string calldata prompt, string calldata system, bool cot, string[] calldata allowedValues)
         external
@@ -74,7 +76,10 @@ interface ILlmAgent {
         returns (int256);
 }
 
-/// @dev Somnia "parse website" agent. Signatures per docs — verify before mainnet.
+/// @dev Somnia "parse website" agent. Signature confirmed against
+///      docs.somnia.network/agents/base-agents/llm-parse-website: numPages and
+///      confidenceThreshold are `uint8` (not uint256) — this is part of the function
+///      selector, so the width must match or the live agent never sees a valid call.
 interface IParseAgent {
     function ExtractString(
         string calldata key,
@@ -83,8 +88,8 @@ interface IParseAgent {
         string calldata prompt,
         string calldata url,
         bool resolveUrl,
-        uint256 numPages,
-        uint256 confidenceThreshold
+        uint8 numPages,
+        uint8 confidenceThreshold
     ) external returns (string memory);
 }
 
@@ -107,13 +112,13 @@ interface IAgentRequesterAdvanced {
 
 /// @notice Canonical Somnia Agents IDs + platform addresses. Same agentId on both
 ///         networks; only the platform address differs.
-/// @dev    JSON and PARSE ids are confirmed on-chain; LLM_INFERENCE is UNVERIFIED —
-///         confirm against agents.somnia.network / on-chain before relying on it.
+/// @dev    All three ids are confirmed: JSON via the live OracleAgent, LLM_INFERENCE
+///         and PARSE_WEBSITE on the official Somnia console (agents.somnia.network).
 ///         On Shannon (testnet) there is no on-chain AgentRegistry — treat these as
 ///         constants. See repo docs/SOMNIA_AI.md.
 library SomniaAgentIds {
     uint256 internal constant JSON_API = 13174292974160097713;
-    uint256 internal constant LLM_INFERENCE = 12847293847561029384; // UNVERIFIED
+    uint256 internal constant LLM_INFERENCE = 12847293847561029384; // id+inferString ABI confirmed (console)
     uint256 internal constant PARSE_WEBSITE = 12875401142070969085;
 
     address internal constant PLATFORM_TESTNET = 0x037Bb9C718F3f7fe5eCBDB0b600D607b52706776; // Shannon (50312)

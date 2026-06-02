@@ -92,10 +92,10 @@ Exactly **three** live base agents (Phase 1). Identical `agentId`s on testnet an
 | Agent | agentId | Input (key fns) | Output | Cost / validator | Total @ sub=3 | Determinism |
 |---|---|---|---|---|---|---|
 | **JSON API Request** (`json-fetch`) | `13174292974160097713` ✅ | `fetchUint(url,selector,decimals)`, `fetchInt`, `fetchString`, `fetchBool`, `fetchStringArray`, `fetchUintArray` | typed scalar / array | 0.03 STT | **~0.12 STT** ✅ live | Deterministic (data fetch) |
-| **LLM Inference** (`llm-inference`, Qwen3-30B) | `12847293847561029384` ⚠️ | `inferString(prompt,system,cot,allowedValues[])`, `inferNumber(prompt,system,min,max,cot)`, `inferChat(roles[],msgs[],cot)`, `inferToolsChat(...mcpUrls[],OnchainTool[],maxIterations,cot)` | string / int256 / chat / agentic tuple | 0.07 STT | ~0.24 STT (est.) | Deterministic: fixed seed + temp=0 → byte-identical |
+| **LLM Inference** (`llm-inference`, Qwen3-30B) | `12847293847561029384` ✅ | `inferString(prompt,system,cot,allowedValues[])`, `inferNumber(prompt,system,min,max,cot)`, `inferChat(roles[],msgs[],cot)`, `inferToolsChat(...mcpUrls[],OnchainTool[],maxIterations,cot)` | string / int256 / chat / agentic tuple | 0.07 STT | **0.24 SOMI** ✅ console | Deterministic: fixed seed + temp=0 → byte-identical |
 | **LLM Parse Website** (`llm-parse-website`) | `12875401142070969085` ✅ | `ExtractString(key,desc,options[],prompt,url,resolveUrl,numPages,confidence)`, `ExtractANumber(...,min,max,...)` | string / uint256 | 0.10 STT | ~0.33 STT (est.) | Deterministic extraction; `confidenceThreshold` (0–100) gates |
 
-**ID provenance:** JSON (`131742…`) and Parse (`128754…`) are confirmed via the dev blog and on-chain reads of the mainnet AgentRegistry. The **LLM Inference ID `12847293847561029384` is from the AgentRegistry `getAllAgents()` read but is *not* in official static docs** — pull it from the snippet generator at [agents.testnet.somnia.network](https://agents.testnet.somnia.network/) or read the registry at request time before hardcoding. The from-Solidity docs page uses a *placeholder* ID (`12345678901234567890`).
+**ID provenance:** JSON (`131742…`) and Parse (`128754…`) are confirmed via the dev blog and on-chain reads of the mainnet AgentRegistry. The **LLM Inference ID `12847293847561029384` is now confirmed on the official Somnia console** ([agents.somnia.network](https://agents.somnia.network/) → *LLM Inference*, observed 2026-06-02): the console shows the exact ID, the `inferString(string prompt, string system, bool chainOfThought, string[] allowedValues)` signature (byte-for-byte our `ILlmAgent`/`SomniaAI` encoder), `4 methods available` (incl. `inferChat`/`inferToolsChat`, not wrapped), and a **0.24 SOMI** deposit (matching our prior estimate). Still *not* in the static from-Solidity docs page, which uses a *placeholder* ID (`12345678901234567890`). **Not yet exercised in a live consensus round** — `inferNumber`/`inferChat`/`inferToolsChat` ABIs and the actual round-trip remain to be verified on Shannon (the deploy + live-verify step).
 
 **Notable agent details:**
 - **`decimals` scaling** (JSON agent): `decimals=8` turns `42000.50` into `4200050000000`. Selector syntax is dot/bracket notation: `bitcoin.usd`, `data.price`, `items[0].name`.
@@ -190,6 +190,25 @@ WebSocket `eth_subscribe` + `somnia_watch` (`@somnia-chain/reactivity` + viem) p
 - **ERC-6551 on Somnia is undocumented** but asom has it **live and verified** on Shannon (full create→exec→transfer lifecycle, 2026-06-02, `DEPLOYMENTS.md`).
 
 ---
+
+## IMPLEMENTATION STATUS (updated 2026-06-02)
+
+- **Tier 1.1 — generalized compute mixin: DONE.** `AgentCompute` (abstract) distills the
+  `OracleAgent` pattern; `LlmAgent` (inference: classify/number) and `ParseAgent` (web extract)
+  are built on it. All three base agents are now reusable on-chain primitives.
+- **Tier 1.3 — AI-judged settlement: DONE (advisory).** `LlmAgent.requestClassification` with
+  `allowedValues=["accept","reject"]` is exposed via `asom ai judge` and the console's "Ask AI to
+  judge". It informs the poster; the deployed `TaskBoard` is unchanged (no contract gets unilateral
+  payout authority — a deliberately conservative, no-redeploy choice).
+- **Consensus receipts: DONE.** The platform `Response.receipt` / `executionCost` data (previously
+  discarded) is now captured per request by `AgentCompute` (`consensusOf(id)` + `ConsensusReached`).
+- **Somnia AgentRegistry resolver: DONE (read-only, optional).** `AsomClient.resolveSomniaAgents()`
+  reads Somnia's mainnet registry (`getAllAgents`/`getAgent`) and falls back to the hardcoded
+  `SomniaAgentIds` on testnet — the §3 two-store resolver. Surfaced by `asom somnia`.
+- **Deferred: Tier 2.x reactivity (precompile `0x0100`).** Keeperless schedules, self-refreshing
+  oracles, and auto-settling task boards remain UNVERIFIED (constants/units, testnet-only) and are
+  not built. The console's Workflows page demonstrates the `fetch → reason → act` pipeline
+  client-side without depending on the precompile.
 
 ## INTEGRATION PLAN FOR ASOM
 

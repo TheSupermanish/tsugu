@@ -13,6 +13,11 @@ export const deployments: Record<
     agentAccount: Address;
     capabilityRegistry?: Address;
     taskBoard?: Address;
+    /** AI compute primitives (AgentCompute subclasses) — optional per chain.
+     *  Populate after deploying script/DeployCompute.s.sol (see DEPLOYMENTS.md). */
+    llmAgent?: Address;
+    parseAgent?: Address;
+    oracleAgent?: Address;
     deployBlock?: bigint;
   }
 > = {
@@ -27,6 +32,9 @@ export const deployments: Record<
     // discovery, payout safety). Supersedes 0x8f8A…/0x0C44….
     capabilityRegistry: "0xb92168c5D637A3087Da85f757c607F2f508DDc96",
     taskBoard: "0xA59f329689fD5DA78D0fE79dc285297E050a2B16",
+    // AI compute primitives — set once deployed (see packages/contracts/DEPLOYMENTS.md).
+    oracleAgent: "0x4C9Fab534F97c76F4Ed6895Fda07Eb601f363188",
+    // llmAgent / parseAgent: populated after script/DeployCompute.s.sol runs on Shannon.
     deployBlock: 398072018n,
   },
 };

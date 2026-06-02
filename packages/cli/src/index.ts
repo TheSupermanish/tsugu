@@ -768,4 +768,191 @@ task
     console.log("");
   });
 
+// --- Somnia base AI agents + asom AI compute --------------------------------
+
+program
+  .command("somnia")
+  .description("Show Somnia's base AI agents (resolved from its registry on mainnet, or constants on testnet)")
+  .action(async () => {
+    banner();
+    const c = client();
+    try {
+      const agents = await c.resolveSomniaAgents();
+      const dep = await c.somniaRequestDeposit().catch(() => undefined);
+      console.log("");
+      console.log(`  ${brand(`Somnia base agents (${agents.length})`)} ${muted(`· chain ${c.chainId}`)}`);
+      for (const a of agents) {
+        console.log(
+          `  ${accent("◆")} ${pc.bold(a.capability ?? "agent")} ${muted("#" + a.id.toString())} ` +
+            `${muted("·")} ${a.status ?? "?"} ${muted("· from " + a.source)}`,
+        );
+        if (a.metadataJsonUri) console.log(`      ${muted(a.metadataJsonUri)}`);
+      }
+      if (dep !== undefined) console.log(`\n  ${label("deposit")} ~${formatStt(dep)} STT floor / request ${muted("(live)")}`);
+      console.log("");
+    } catch (err) {
+      console.error(bad("  ✗ could not resolve Somnia agents:"), (err as Error).message);
+      process.exit(1);
+    }
+  });
+
+const ai = program.command("ai").description("Run Somnia's consensus AI: classify, number, extract — or judge a task");
+
+/** Dispatch an AI request as the operator (caller-pays the consensus deposit), then
+ *  poll for the consensus callback and print the verdict + receipt. */
+async function runAi(
+  label_: string,
+  dispatch: (c: AsomClient) => Promise<{ requestId: bigint; txHash: Hex }>,
+  kind: "classify" | "number" | "extract",
+): Promise<void> {
+  const { operatorKey } = await unlock();
+  const c = client(operatorKey);
+  let deposit: bigint;
+  try {
+    deposit = await c.aiRequiredDeposit(kind);
+  } catch (e) {
+    console.error(bad(`  ✗ ${(e as Error).message}`));
+    console.error(muted("    Deploy the compute layer first (script/DeployCompute.s.sol) and set its address."));
+    process.exit(1);
+  }
+  await assertFunded(c, deposit + parseEther("0.05"), `run an AI ${label_}`);
+  try {
+    const { requestId, txHash } = await dispatch(c);
+    console.log(ok(`  🧠 ${label_} dispatched`) + ` — request #${requestId}`);
+    console.log(`     ${muted(c.explorer("tx", txHash))}`);
+    console.log(muted("     awaiting consensus (lands in a later block)…"));
+    const res = await c.waitForAiResult(kind, requestId);
+    if (!res.ok) {
+      console.error(warn("  ⚠ request did not reach consensus (Failed / TimedOut)."));
+      process.exit(1);
+    }
+    console.log(ok(`  ✓ consensus: `) + pc.bold(String(res.value)));
+    if (res.receipt) {
+      console.log(`     ${muted(`${res.receipt.validators} validators · receipt ${res.receipt.receiptId}`)}`);
+    }
+  } catch (err) {
+    console.error(bad(`  ✗ ${label_} failed:`), (err as Error).message);
+    process.exit(1);
+  }
+}
+
+ai
+  .command("classify")
+  .description("Classify a prompt into one of --allow values under consensus (e.g. accept,reject)")
+  .argument("<prompt>", "the prompt / content to classify")
+  .requiredOption("-a, --allow <values>", "allowed answers, comma-separated (e.g. accept,reject)")
+  .option("-s, --system <text>", "system instruction", "")
+  .action(async (prompt: string, opts: { allow: string; system: string }) => {
+    banner();
+    const allowed = opts.allow.split(",").map((s) => s.trim()).filter(Boolean);
+    if (allowed.length === 0) {
+      console.error(bad("  ✗ provide at least one --allow value."));
+      process.exit(1);
+    }
+    await runAi("classify", (c) => c.aiClassify(prompt, allowed, { system: opts.system }), "classify");
+  });
+
+ai
+  .command("number")
+  .description("Infer a bounded integer in [--min, --max] under consensus")
+  .argument("<prompt>", "the prompt to infer a number for")
+  .requiredOption("--min <int>", "minimum allowed value")
+  .requiredOption("--max <int>", "maximum allowed value")
+  .option("-s, --system <text>", "system instruction", "")
+  .action(async (prompt: string, opts: { min: string; max: string; system: string }) => {
+    banner();
+    let min: bigint, max: bigint;
+    try {
+      min = BigInt(opts.min);
+      max = BigInt(opts.max);
+    } catch {
+      console.error(bad("  ✗ --min/--max must be integers."));
+      process.exit(1);
+    }
+    await runAi("number", (c) => c.aiNumber(prompt, min, max, { system: opts.system }), "number");
+  });
+
+ai
+  .command("extract")
+  .description("Extract a field from a web page under consensus")
+  .requiredOption("-u, --url <url>", "page to read")
+  .requiredOption("-k, --key <name>", "field to extract (e.g. headline)")
+  .option("-d, --description <text>", "what the field means", "")
+  .option("-p, --prompt <text>", "extraction instruction", "")
+  .option("--pages <n>", "pages to read", "1")
+  .option("--confidence <0-100>", "confidence gate", "0")
+  .action(async (opts: { url: string; key: string; description: string; prompt: string; pages: string; confidence: string }) => {
+    banner();
+    const pages = Number(opts.pages);
+    const confidence = Number(opts.confidence);
+    if (!Number.isInteger(pages) || pages < 1) {
+      console.error(bad("  ✗ --pages must be a positive integer."));
+      process.exit(1);
+    }
+    if (!Number.isInteger(confidence) || confidence < 0 || confidence > 100) {
+      console.error(bad("  ✗ --confidence must be an integer in 0–100."));
+      process.exit(1);
+    }
+    await runAi(
+      "extract",
+      (c) =>
+        c.aiExtract({
+          key: opts.key,
+          description: opts.description,
+          prompt: opts.prompt || `extract ${opts.key}`,
+          url: opts.url,
+          numPages: pages,
+          confidenceThreshold: confidence,
+        }),
+      "extract",
+    );
+  });
+
+ai
+  .command("judge")
+  .description("Ask the consensus LLM whether a submitted task should be accepted (advisory)")
+  .argument("<taskId>", "task id")
+  .option("--allow <values>", "verdict options", "accept,reject")
+  .action(async (taskId: string, opts: { allow: string }) => {
+    banner();
+    const { operatorKey } = await unlock();
+    const c = client(operatorKey);
+    let task;
+    try {
+      task = await c.getTask(BigInt(taskId));
+    } catch {
+      console.error(warn(`  task #${taskId} not found.`));
+      process.exit(1);
+    }
+    if (task.status === 0) {
+      console.error(warn(`  task #${taskId} does not exist.`));
+      process.exit(1);
+    }
+    const spec = await fetchText(task.specURI);
+    const result = await fetchText(task.resultURI);
+    const allowed = opts.allow.split(",").map((s) => s.trim()).filter(Boolean);
+    const prompt =
+      `You are judging whether submitted work meets a task spec. ` +
+      `TASK SPEC:\n${spec || task.specURI || "(none)"}\n\nSUBMITTED RESULT:\n${result || task.resultURI || "(none)"}\n\n` +
+      `Does the result satisfy the spec? Answer with exactly one of: ${allowed.join(", ")}.`;
+    console.log(muted(`  judging task #${taskId} (advisory — the poster still decides)…`));
+    await runAi("judge", (cc) => cc.aiClassify(prompt, allowed, { system: "Be a strict, fair reviewer." }), "classify");
+    console.log(muted(`  → If 'accept': ${accent(`asom task approve ${taskId}`)}.  If 'reject': ${accent(`asom task refund ${taskId}`)}.`));
+  });
+
+/** Best-effort fetch of an http(s) URI's text (for task spec/result judging). */
+async function fetchText(uri: string): Promise<string> {
+  if (!/^https?:\/\//i.test(uri)) return "";
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 5000);
+    const res = await fetch(uri, { signal: ctrl.signal });
+    clearTimeout(timer);
+    if (!res.ok) return "";
+    return (await res.text()).slice(0, 4000); // cap to keep the prompt bounded
+  } catch {
+    return "";
+  }
+}
+
 program.parseAsync(process.argv);
