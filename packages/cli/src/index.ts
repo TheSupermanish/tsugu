@@ -883,6 +883,16 @@ ai
   .option("--confidence <0-100>", "confidence gate", "0")
   .action(async (opts: { url: string; key: string; description: string; prompt: string; pages: string; confidence: string }) => {
     banner();
+    const pages = Number(opts.pages);
+    const confidence = Number(opts.confidence);
+    if (!Number.isInteger(pages) || pages < 1) {
+      console.error(bad("  ✗ --pages must be a positive integer."));
+      process.exit(1);
+    }
+    if (!Number.isInteger(confidence) || confidence < 0 || confidence > 100) {
+      console.error(bad("  ✗ --confidence must be an integer in 0–100."));
+      process.exit(1);
+    }
     await runAi(
       "extract",
       (c) =>
@@ -891,8 +901,8 @@ ai
           description: opts.description,
           prompt: opts.prompt || `extract ${opts.key}`,
           url: opts.url,
-          numPages: Number(opts.pages) || 1,
-          confidenceThreshold: Number(opts.confidence) || 0,
+          numPages: pages,
+          confidenceThreshold: confidence,
         }),
       "extract",
     );

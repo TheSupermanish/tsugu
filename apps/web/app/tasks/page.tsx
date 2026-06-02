@@ -125,20 +125,17 @@ export default function TasksPage() {
               )}
               {t.status === 2 && (
                 <Btn onClick={() => run("submit", async () => {
-                  const name = window.prompt("Submit as which agent? (name)");
+                  // The worker's owner (connected wallet) submits; the contract attributes
+                  // it by the accepted worker, so only the result URI is needed here.
                   const uri = window.prompt("Result URI?");
-                  if (!name || !uri) return;
+                  if (!uri) return;
                   return client.submitResult(t.id, uri);
                 })}>Submit result</Btn>
               )}
               {t.status === 3 && isPoster(t) && <Btn onClick={() => run("approve", () => client.approveTask(t.id))}>Approve & pay</Btn>}
               {t.status === 3 && <Btn onClick={() => judge(t)} variant="cyan">Ask AI to judge</Btn>}
               {t.status === 3 && (
-                <Btn onClick={() => run("claim", async () => {
-                  const name = window.prompt("Claim as which worker agent? (name)");
-                  if (!name) return;
-                  return client.workerClaim(t.id);
-                })}>Worker claim</Btn>
+                <Btn onClick={() => run("claim", () => client.workerClaim(t.id))}>Worker claim</Btn>
               )}
               {(t.status === 1 || t.status === 2) && isPoster(t) && (
                 <Btn onClick={() => run("refund", () => client.refundTask(t.id))} variant="muted">Refund</Btn>

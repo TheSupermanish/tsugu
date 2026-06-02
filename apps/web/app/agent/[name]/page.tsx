@@ -77,6 +77,9 @@ export default function AgentPage({ params }: { params: { name: string } }) {
 
           {connected && isOwner && (
             <AdvertisePanel
+              // Remount when the on-chain capabilities change (e.g. after a save refetch)
+              // so the checkbox selection re-syncs to the persisted listing.
+              key={agent.capabilities.join(",")}
               tokenId={BigInt(agent.tokenId)}
               current={agent.capabilities.filter((c) => !c.startsWith("0x"))}
               onSaved={() => getAgent(name).then(setAgent)}

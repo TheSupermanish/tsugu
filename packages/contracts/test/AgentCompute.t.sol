@@ -191,6 +191,24 @@ contract AgentComputeTest is Test {
         assertGt(r.finalizedAt, 0);
     }
 
+    function test_consensusReceipt_evenValidators_averagesTwoMiddle() public {
+        vm.deal(address(echo), deposit());
+        echo.dispatchPublic(1, hex"01");
+        uint256 id = echo.lastRequestId();
+
+        // Four validators with costs [1, 2, 4, 8] → true median (2+4)/2 = 3.
+        uint256[] memory costs = new uint256[](4);
+        costs[0] = 1;
+        costs[1] = 2;
+        costs[2] = 4;
+        costs[3] = 8;
+        platform.fireStringConsensus(address(echo), id, "ok", costs, 500);
+
+        AgentCompute.Receipt memory r = echo.consensusOf(id);
+        assertEq(r.validators, 4);
+        assertEq(r.executionCost, 3); // (2+4)/2, not the upper-middle 4
+    }
+
     function test_doubleCallback_secondIsUnknown() public {
         vm.deal(address(echo), deposit());
         echo.dispatchPublic(1, hex"01");

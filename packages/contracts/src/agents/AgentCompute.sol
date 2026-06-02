@@ -188,7 +188,10 @@ abstract contract AgentCompute is ReentrancyGuard {
             }
             costs[j] = key;
         }
-        return n == 0 ? 0 : costs[n / 2];
+        if (n == 0) return 0;
+        // True median: average the two middle elements for an even count (the default
+        // subcommittee is odd, but advanced consensus may request an even one).
+        return n % 2 == 1 ? costs[n / 2] : (costs[n / 2 - 1] + costs[n / 2]) / 2;
     }
 
     /// @dev Decode + store a successful consensus result. Implemented by each primitive.
