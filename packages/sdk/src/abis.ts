@@ -109,6 +109,202 @@ export const agentNftAbi = [
   },
 ] as const;
 
+/// CapabilityRegistry — the discovery layer. Agents advertise capability tags +
+/// a service URI; `providers(tag)` finds capable agents on-chain.
+export const capabilityRegistryAbi = [
+  {
+    type: "function",
+    name: "advertise",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "tokenId", type: "uint256" },
+      { name: "tags", type: "bytes32[]" },
+      { name: "serviceURI", type: "string" },
+      { name: "pricePerCall", type: "uint256" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "addCapability",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "tokenId", type: "uint256" },
+      { name: "tag", type: "bytes32" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "removeCapability",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "tokenId", type: "uint256" },
+      { name: "tag", type: "bytes32" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "setService",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "tokenId", type: "uint256" },
+      { name: "serviceURI", type: "string" },
+      { name: "pricePerCall", type: "uint256" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "hasCapability",
+    stateMutability: "view",
+    inputs: [
+      { name: "tokenId", type: "uint256" },
+      { name: "tag", type: "bytes32" },
+    ],
+    outputs: [{ name: "", type: "bool" }],
+  },
+  {
+    type: "function",
+    name: "capabilitiesOf",
+    stateMutability: "view",
+    inputs: [{ name: "tokenId", type: "uint256" }],
+    outputs: [{ name: "", type: "bytes32[]" }],
+  },
+  {
+    type: "function",
+    name: "providers",
+    stateMutability: "view",
+    inputs: [{ name: "tag", type: "bytes32" }],
+    outputs: [{ name: "", type: "uint256[]" }],
+  },
+  {
+    type: "function",
+    name: "providerCount",
+    stateMutability: "view",
+    inputs: [{ name: "tag", type: "bytes32" }],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "listings",
+    stateMutability: "view",
+    inputs: [{ name: "", type: "uint256" }],
+    outputs: [
+      { name: "serviceURI", type: "string" },
+      { name: "pricePerCall", type: "uint256" },
+      { name: "listed", type: "bool" },
+    ],
+  },
+] as const;
+
+/// TaskBoard — the coordination layer. Post a task with an escrowed reward + a
+/// required capability; a capable agent accepts, submits, and is paid into its wallet.
+export const taskBoardAbi = [
+  {
+    type: "function",
+    name: "postTask",
+    stateMutability: "payable",
+    inputs: [
+      { name: "capability", type: "bytes32" },
+      { name: "specURI", type: "string" },
+      { name: "deadline", type: "uint64" },
+    ],
+    outputs: [{ name: "taskId", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "acceptTask",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "taskId", type: "uint256" },
+      { name: "workerTokenId", type: "uint256" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "submitResult",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "taskId", type: "uint256" },
+      { name: "resultURI", type: "string" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "approveTask",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "taskId", type: "uint256" }],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "workerClaim",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "taskId", type: "uint256" }],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "refund",
+    stateMutability: "nonpayable",
+    inputs: [{ name: "taskId", type: "uint256" }],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "getTask",
+    stateMutability: "view",
+    inputs: [{ name: "taskId", type: "uint256" }],
+    outputs: [
+      {
+        name: "",
+        type: "tuple",
+        components: [
+          { name: "poster", type: "address" },
+          { name: "capability", type: "bytes32" },
+          { name: "reward", type: "uint256" },
+          { name: "deadline", type: "uint64" },
+          { name: "submittedAt", type: "uint64" },
+          { name: "workerTokenId", type: "uint256" },
+          { name: "status", type: "uint8" },
+          { name: "specURI", type: "string" },
+          { name: "resultURI", type: "string" },
+        ],
+      },
+    ],
+  },
+  {
+    type: "function",
+    name: "nextTaskId",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "REVIEW_WINDOW",
+    stateMutability: "view",
+    inputs: [],
+    outputs: [{ name: "", type: "uint64" }],
+  },
+  {
+    type: "event",
+    name: "TaskPosted",
+    inputs: [
+      { name: "taskId", type: "uint256", indexed: true },
+      { name: "poster", type: "address", indexed: true },
+      { name: "capability", type: "bytes32", indexed: true },
+      { name: "reward", type: "uint256", indexed: false },
+      { name: "deadline", type: "uint64", indexed: false },
+      { name: "specURI", type: "string", indexed: false },
+    ],
+  },
+] as const;
+
 /// AgentAccount — the ERC-6551 token-bound wallet. Only the bound NFT's owner
 /// may `execute`; this is how an agent acts on-chain (move funds, call contracts).
 export const agentAccountAbi = [
