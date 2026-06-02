@@ -2,6 +2,125 @@
 @tailwind components;
 @tailwind utilities;
 
-body {
-  @apply bg-neutral-950 text-neutral-100 antialiased;
+:root {
+  --gold: #d8a64a;
+  --gold-light: #f7e7bd;
+  --ink: #0a0807;
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+  body {
+    @apply bg-ink-950 text-porcelain-muted font-sans antialiased;
+    background-image:
+      radial-gradient(900px 600px at 78% -8%, rgba(216, 166, 74, 0.1), transparent 60%),
+      radial-gradient(700px 500px at 8% 105%, rgba(216, 166, 74, 0.06), transparent 55%);
+    background-attachment: fixed;
+  }
+  ::selection {
+    background: rgba(216, 166, 74, 0.28);
+    color: #fff;
+  }
+  h1, h2, h3 {
+    @apply font-serif text-porcelain;
+    letter-spacing: -0.01em;
+  }
+  /* Thin warm scrollbar */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: #2a2419; border-radius: 8px; }
+  ::-webkit-scrollbar-thumb:hover { background: #3a3122; }
+}
+
+@layer components {
+  /* The seam: a hairline of kintsugi gold. */
+  .seam {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--gold) 18%, var(--gold-light) 50%, var(--gold) 82%, transparent);
+    opacity: 0.7;
+  }
+  .seam-v {
+    width: 1px;
+    background: linear-gradient(180deg, transparent, var(--gold) 18%, var(--gold-light) 50%, var(--gold) 82%, transparent);
+    opacity: 0.7;
+  }
+
+  /* Gold metallic text. */
+  .text-gold {
+    background: linear-gradient(100deg, #9a6a22, #d8a64a 35%, #f7e7bd 50%, #d8a64a 65%, #9a6a22);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* A lacquer panel — the pottery surface. */
+  .panel {
+    @apply rounded-2xl border border-ink-700/80 bg-ink-900/70 backdrop-blur-sm;
+    box-shadow: 0 24px 64px -40px rgba(0, 0, 0, 0.9);
+  }
+  .panel-raised {
+    @apply rounded-2xl border border-ink-700 bg-ink-850;
+    box-shadow: 0 24px 64px -36px rgba(0, 0, 0, 0.9);
+  }
+
+  /* Card that reveals a gold seam on its top edge when active/hovered. */
+  .card-link {
+    @apply relative rounded-2xl border border-ink-700/80 bg-ink-900/60 transition-all duration-300;
+  }
+  .card-link::before {
+    content: "";
+    position: absolute;
+    inset-inline: 1.25rem;
+    top: -1px;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--gold), transparent);
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+  .card-link:hover {
+    @apply border-gold-700/60 -translate-y-0.5;
+    box-shadow: 0 28px 60px -34px rgba(216, 166, 74, 0.35);
+  }
+  .card-link:hover::before { opacity: 1; }
+
+  /* Primary button — gold leaf. */
+  .btn-gold {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-5 py-2.5 text-sm font-semibold text-ink-950
+           transition-all duration-200 disabled:cursor-not-allowed disabled:opacity-45;
+    background: linear-gradient(180deg, #f0d493, #d8a64a 55%, #c08833);
+    box-shadow: 0 10px 30px -12px rgba(216, 166, 74, 0.6);
+  }
+  .btn-gold:hover:not(:disabled) {
+    background: linear-gradient(180deg, #f7e7bd, #e6bd6a 55%, #d8a64a);
+    box-shadow: 0 14px 36px -10px rgba(216, 166, 74, 0.7);
+  }
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl border border-ink-600 px-5 py-2.5 text-sm
+           font-medium text-porcelain-muted transition-all duration-200
+           hover:border-gold-700/70 hover:text-porcelain disabled:opacity-45;
+  }
+
+  .input {
+    @apply w-full rounded-xl border border-ink-700 bg-ink-950/60 px-3.5 py-2.5 text-porcelain
+           placeholder:text-porcelain-faint outline-none transition-colors
+           focus:border-gold-600/70 focus:ring-2 focus:ring-gold-700/25;
+  }
+  .label { @apply mb-1.5 block text-xs font-medium uppercase tracking-wider text-porcelain-dim; }
+
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium;
+  }
+}
+
+@layer utilities {
+  .animate-delay-100 { animation-delay: 0.1s; }
+  .animate-delay-200 { animation-delay: 0.2s; }
+  .animate-delay-300 { animation-delay: 0.3s; }
+  /* gold shimmer fill for skeletons / resolving states */
+  .shimmer-gold {
+    background: linear-gradient(90deg, rgba(216,166,74,0.08), rgba(216,166,74,0.28), rgba(216,166,74,0.08));
+    background-size: 200% 100%;
+    @apply animate-shimmer;
+  }
 }
