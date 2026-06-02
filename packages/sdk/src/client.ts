@@ -5,7 +5,9 @@ import {
   fallback,
   getAddress,
   isAddress,
+  keccak256,
   parseEventLogs,
+  toBytes,
   zeroAddress,
   type Address,
   type Chain,
@@ -18,8 +20,14 @@ import {
 import { privateKeyToAccount } from "viem/accounts";
 import { shannon } from "./chain.js";
 import { deployments } from "./addresses.js";
-import { agentRegistryAbi, agentNftAbi, agentAccountAbi } from "./abis.js";
+import { agentRegistryAbi, agentNftAbi, agentAccountAbi, capabilityRegistryAbi, taskBoardAbi } from "./abis.js";
 import { validateName, parseStt } from "./validate.js";
+
+/** Capability tag = keccak256 of the UTF-8 capability name (e.g. "llm.summarize"),
+ *  matching the on-chain bytes32 tags. */
+export function capabilityTag(name: string): Hex {
+  return keccak256(toBytes(name));
+}
 
 export interface Agent {
   name: string;
@@ -37,6 +45,23 @@ export interface TsuguAddresses {
   agentNFT: Address;
   erc6551Registry: Address;
   agentAccount: Address;
+  /** Discovery layer — optional (a deployment may not include the coordination layer). */
+  capabilityRegistry?: Address;
+  /** Coordination layer — optional. */
+  taskBoard?: Address;
+}
+
+/** A coordination task. `status`: 0 None,1 Open,2 Accepted,3 Submitted,4 Approved,5 Refunded. */
+export interface Task {
+  poster: Address;
+  capability: Hex;
+  reward: bigint;
+  deadline: bigint;
+  submittedAt: bigint;
+  workerTokenId: bigint;
+  status: number;
+  specURI: string;
+  resultURI: string;
 }
 
 export interface TsuguClientOptions {
@@ -64,7 +89,14 @@ const GAS = {
   transfer: 2_000_000n,
   execute: 3_000_000n,
   send: 800_000n,
+  // Coordination layer: enumerable-set writes + a string store + escrow/payout. On
+  // Shannon (~20x gas) `advertise` alone measures ~3.5M, so pin well above that.
+  advertise: 8_000_000n,
+  coord: 8_000_000n,
 } as const;
+
+/** The largest write-gas limit — what an agent's owner key must be funded to cover. */
+const MAX_WRITE_GAS = [GAS.advertise, GAS.coord, GAS.execute, GAS.transfer].reduce((a, b) => (a > b ? a : b));
 
 // Chunk size for paginated log scans. Shannon's public RPC caps eth_getLogs at a
 // 1000-block range, so we page in 1000-block windows from the registry's deploy
@@ -109,6 +141,8 @@ export class TsuguClient {
       agentNFT: addresses.agentNFT,
       erc6551Registry: addresses.erc6551Registry,
       agentAccount: addresses.agentAccount,
+      capabilityRegistry: addresses.capabilityRegistry,
+      taskBoard: addresses.taskBoard,
     };
     this.deployBlock = opts.deployBlock ?? dep?.deployBlock ?? 0n;
 
@@ -242,8 +276,7 @@ export class TsuguClient {
    */
   async opGasBudget(): Promise<bigint> {
     const gasPrice = await this.getGasPrice();
-    const maxGas = GAS.execute > GAS.transfer ? GAS.execute : GAS.transfer;
-    return gasPrice * maxGas * 2n;
+    return gasPrice * MAX_WRITE_GAS * 2n;
   }
 
   /**
@@ -414,6 +447,234 @@ export class TsuguClient {
     const receipt = await this.publicClient.waitForTransactionReceipt({ hash });
     if (receipt.status === "reverted") throw new Error(`tsugu: send to ${recipient} reverted (tx ${hash})`);
     return hash;
+  }
+
+  // --- discovery (CapabilityRegistry) --------------------------------------
+
+  private capsAddr(): Address {
+    const a = this.addresses.capabilityRegistry;
+    if (!a) throw new Error("tsugu: no CapabilityRegistry for this chain; pass addresses.capabilityRegistry");
+    return a;
+  }
+
+  private boardAddr(): Address {
+    const a = this.addresses.taskBoard;
+    if (!a) throw new Error("tsugu: no TaskBoard for this chain; pass addresses.taskBoard");
+    return a;
+  }
+
+  private async finishWrite(request: unknown, label: string): Promise<Hash> {
+    const hash = await this.walletClient!.writeContract(request as Parameters<WalletClient["writeContract"]>[0]);
+    const receipt = await this.publicClient.waitForTransactionReceipt({ hash });
+    if (receipt.status === "reverted") throw new Error(`tsugu: ${label} reverted (tx ${hash})`);
+    return hash;
+  }
+
+  /** Advertise an agent's capabilities + service info in one call (owner-gated). */
+  async advertise(
+    tokenId: bigint,
+    opts: { capabilities: string[]; serviceURI?: string; pricePerCall?: string },
+  ): Promise<Hash> {
+    const { account } = this.requireSigner("advertise");
+    const tags = opts.capabilities.map(capabilityTag);
+    const price = opts.pricePerCall ? parseStt(opts.pricePerCall) : 0n;
+    const { request } = await this.publicClient.simulateContract({
+      address: this.capsAddr(),
+      abi: capabilityRegistryAbi,
+      functionName: "advertise",
+      args: [tokenId, tags, opts.serviceURI ?? "", price],
+      account,
+      gas: GAS.advertise,
+    });
+    return this.finishWrite(request, "advertise");
+  }
+
+  /** Add a single capability to an agent. */
+  async addCapability(tokenId: bigint, capability: string): Promise<Hash> {
+    const { account } = this.requireSigner("addCapability");
+    const { request } = await this.publicClient.simulateContract({
+      address: this.capsAddr(),
+      abi: capabilityRegistryAbi,
+      functionName: "addCapability",
+      args: [tokenId, capabilityTag(capability)],
+      account,
+      gas: GAS.coord,
+    });
+    return this.finishWrite(request, "addCapability");
+  }
+
+  /** Remove a single capability from an agent. */
+  async removeCapability(tokenId: bigint, capability: string): Promise<Hash> {
+    const { account } = this.requireSigner("removeCapability");
+    const { request } = await this.publicClient.simulateContract({
+      address: this.capsAddr(),
+      abi: capabilityRegistryAbi,
+      functionName: "removeCapability",
+      args: [tokenId, capabilityTag(capability)],
+      account,
+      gas: GAS.coord,
+    });
+    return this.finishWrite(request, "removeCapability");
+  }
+
+  /** True if an agent advertises a capability. */
+  async hasCapability(tokenId: bigint, capability: string): Promise<boolean> {
+    return this.publicClient.readContract({
+      address: this.capsAddr(),
+      abi: capabilityRegistryAbi,
+      functionName: "hasCapability",
+      args: [tokenId, capabilityTag(capability)],
+    });
+  }
+
+  /** Raw capability tags an agent advertises. */
+  async capabilitiesOf(tokenId: bigint): Promise<readonly Hex[]> {
+    return this.publicClient.readContract({
+      address: this.capsAddr(),
+      abi: capabilityRegistryAbi,
+      functionName: "capabilitiesOf",
+      args: [tokenId],
+    });
+  }
+
+  /** Discover the agents (tokenIds) advertising a capability. */
+  async providers(capability: string): Promise<readonly bigint[]> {
+    return this.publicClient.readContract({
+      address: this.capsAddr(),
+      abi: capabilityRegistryAbi,
+      functionName: "providers",
+      args: [capabilityTag(capability)],
+    });
+  }
+
+  /** An agent's service listing (URI, price, listed). */
+  async listingOf(tokenId: bigint): Promise<{ serviceURI: string; pricePerCall: bigint; listed: boolean }> {
+    const [serviceURI, pricePerCall, listed] = await this.publicClient.readContract({
+      address: this.capsAddr(),
+      abi: capabilityRegistryAbi,
+      functionName: "listings",
+      args: [tokenId],
+    });
+    return { serviceURI, pricePerCall, listed };
+  }
+
+  // --- coordination (TaskBoard) --------------------------------------------
+
+  /** Post a task: escrow `rewardStt` and require `capability` of any worker. */
+  async postTask(opts: {
+    capability: string;
+    rewardStt: string;
+    deadline: number | bigint;
+    specURI?: string;
+  }): Promise<{ taskId: bigint; txHash: Hash }> {
+    const { account } = this.requireSigner("postTask");
+    const reward = parseStt(opts.rewardStt);
+    const { request } = await this.publicClient.simulateContract({
+      address: this.boardAddr(),
+      abi: taskBoardAbi,
+      functionName: "postTask",
+      args: [capabilityTag(opts.capability), opts.specURI ?? "", BigInt(opts.deadline)],
+      value: reward,
+      account,
+      gas: GAS.coord,
+    });
+    const txHash = await this.finishWrite(request, "postTask");
+    const receipt = await this.publicClient.getTransactionReceipt({ hash: txHash });
+    const events = parseEventLogs({ abi: taskBoardAbi, eventName: "TaskPosted", logs: receipt.logs });
+    const ev = events.find((e) => getAddress(e.address) === getAddress(this.boardAddr()));
+    if (!ev) throw new Error("tsugu: postTask landed but TaskPosted log was missing");
+    return { taskId: ev.args.taskId, txHash };
+  }
+
+  /** A capable agent (workerTokenId, owned by the signer) accepts a task. */
+  async acceptTask(taskId: bigint, workerTokenId: bigint): Promise<Hash> {
+    const { account } = this.requireSigner("acceptTask");
+    const { request } = await this.publicClient.simulateContract({
+      address: this.boardAddr(),
+      abi: taskBoardAbi,
+      functionName: "acceptTask",
+      args: [taskId, workerTokenId],
+      account,
+      gas: GAS.coord,
+    });
+    return this.finishWrite(request, "acceptTask");
+  }
+
+  /** The worker submits a result, starting the review window. */
+  async submitResult(taskId: bigint, resultURI: string): Promise<Hash> {
+    const { account } = this.requireSigner("submitResult");
+    const { request } = await this.publicClient.simulateContract({
+      address: this.boardAddr(),
+      abi: taskBoardAbi,
+      functionName: "submitResult",
+      args: [taskId, resultURI],
+      account,
+      gas: GAS.coord,
+    });
+    return this.finishWrite(request, "submitResult");
+  }
+
+  /** The poster approves a submitted task; reward → the worker agent's wallet. */
+  async approveTask(taskId: bigint): Promise<Hash> {
+    const { account } = this.requireSigner("approveTask");
+    const { request } = await this.publicClient.simulateContract({
+      address: this.boardAddr(),
+      abi: taskBoardAbi,
+      functionName: "approveTask",
+      args: [taskId],
+      account,
+      gas: GAS.coord,
+    });
+    return this.finishWrite(request, "approveTask");
+  }
+
+  /** The worker self-claims a submitted task after the review window lapses. */
+  async workerClaim(taskId: bigint): Promise<Hash> {
+    const { account } = this.requireSigner("workerClaim");
+    const { request } = await this.publicClient.simulateContract({
+      address: this.boardAddr(),
+      abi: taskBoardAbi,
+      functionName: "workerClaim",
+      args: [taskId],
+      account,
+      gas: GAS.coord,
+    });
+    return this.finishWrite(request, "workerClaim");
+  }
+
+  /** The poster reclaims escrow (open task, or accepted-but-expired). */
+  async refundTask(taskId: bigint): Promise<Hash> {
+    const { account } = this.requireSigner("refundTask");
+    const { request } = await this.publicClient.simulateContract({
+      address: this.boardAddr(),
+      abi: taskBoardAbi,
+      functionName: "refund",
+      args: [taskId],
+      account,
+      gas: GAS.coord,
+    });
+    return this.finishWrite(request, "refundTask");
+  }
+
+  /** Read a task record. */
+  async getTask(taskId: bigint): Promise<Task> {
+    const t = await this.publicClient.readContract({
+      address: this.boardAddr(),
+      abi: taskBoardAbi,
+      functionName: "getTask",
+      args: [taskId],
+    });
+    return {
+      poster: getAddress(t.poster),
+      capability: t.capability,
+      reward: t.reward,
+      deadline: t.deadline,
+      submittedAt: t.submittedAt,
+      workerTokenId: t.workerTokenId,
+      status: t.status,
+      specURI: t.specURI,
+      resultURI: t.resultURI,
+    };
   }
 
   /** Explorer URL for an address or tx hash. Empty string if the chain has no explorer. */

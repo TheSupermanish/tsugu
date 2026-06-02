@@ -78,11 +78,16 @@ beforeAll(async () => {
   });
   await pub.waitForTransactionReceipt({ hash: setMinter });
 
+  const capabilityRegistry = await deploy("CapabilityRegistry.sol/CapabilityRegistry.json", [nft]);
+  const taskBoard = await deploy("TaskBoard.sol/TaskBoard.json", [nft, registry, capabilityRegistry]);
+
   addresses = {
     agentRegistry: registry,
     agentNFT: nft,
     erc6551Registry: reg6551,
     agentAccount: impl,
+    capabilityRegistry,
+    taskBoard,
   };
 });
 
@@ -275,6 +280,60 @@ describe("TsuguClient agent operations (anvil)", () => {
     const agent = await operator.createAgent("poor-agent", { owner: addrOf(KEY4) });
     // Wallet holds nothing; trying to send 1 STT from it must fail at simulate.
     await expect(owned(KEY4).agentExecute(agent.account, { to: addrOf(KEY5), value: "1" })).rejects.toThrow();
+  });
+
+  it("discovery + coordination: advertise → discover → post → accept → submit → approve pays the worker wallet", async () => {
+    const poster = client(); // ANVIL_KEY funds + posts
+    const workerAddr = addrOf(KEY4);
+    const agent = await poster.createAgent("coord-worker", { owner: workerAddr });
+    const worker = owned(KEY4);
+
+    // Discovery: the worker advertises a capability.
+    await worker.advertise(agent.tokenId, {
+      capabilities: ["llm.summarize"],
+      serviceURI: "https://worker.example/agent.json",
+      pricePerCall: "0.01",
+    });
+    expect(await poster.hasCapability(agent.tokenId, "llm.summarize")).toBe(true);
+    const provs = await poster.providers("llm.summarize");
+    expect(provs.map(String)).toContain(String(agent.tokenId));
+
+    // Coordination: post a task, worker accepts + submits, poster approves.
+    const { taskId } = await poster.postTask({
+      capability: "llm.summarize",
+      rewardStt: "0.1",
+      deadline: 2_000_000_000, // far future
+      specURI: "ipfs://spec",
+    });
+    await worker.acceptTask(taskId, agent.tokenId);
+    await worker.submitResult(taskId, "ipfs://result");
+
+    const before = await poster.getBalance(agent.account);
+    await poster.approveTask(taskId);
+    expect((await poster.getBalance(agent.account)) - before).toBe(parseEther("0.1")); // paid into the agent's OWN wallet
+
+    const t = await poster.getTask(taskId);
+    expect(t.status).toBe(4); // Approved
+    expect(t.workerTokenId).toBe(agent.tokenId);
+  });
+
+  it("accept fails for an agent that doesn't advertise the capability", async () => {
+    const poster = client();
+    const agent = await poster.createAgent("coord-noskill", { owner: addrOf(KEY5) });
+    const { taskId } = await poster.postTask({ capability: "image.generate", rewardStt: "0.05", deadline: 2_000_000_000 });
+    await expect(owned(KEY5).acceptTask(taskId, agent.tokenId)).rejects.toThrow();
+  });
+
+  it("coordination methods throw when no TaskBoard is configured", async () => {
+    const noBoard = new TsuguClient({
+      chain: anvil,
+      rpcUrl: handle.rpcUrl,
+      addresses: { ...addresses, taskBoard: undefined },
+      privateKey: ANVIL_KEY,
+    });
+    await expect(noBoard.postTask({ capability: "x", rewardStt: "0.1", deadline: 2_000_000_000 })).rejects.toThrow(
+      /no TaskBoard/,
+    );
   });
 
   it("hasEverOwned pages across multiple 1000-block windows", async () => {

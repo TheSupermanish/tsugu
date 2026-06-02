@@ -11,6 +11,8 @@ export const deployments: Record<
     agentNFT: Address;
     erc6551Registry: Address;
     agentAccount: Address;
+    capabilityRegistry?: Address;
+    taskBoard?: Address;
     deployBlock?: bigint;
   }
 > = {
@@ -21,6 +23,9 @@ export const deployments: Record<
     agentNFT: "0x2DCD1758CaA40c004cA9F8593b032c384eA10925",
     erc6551Registry: "0x7f3b56f5D737010885FaAeAa771fb2e61d33Ec8B",
     agentAccount: "0x4c4e4B24613c285e33c4c0b5DB0603936A0df600",
+    // Coordination layer (discovery + task board).
+    capabilityRegistry: "0x8f8A38A56dC3800D23109C2d036FA645Ea3cD9Df",
+    taskBoard: "0x0C4423C19532DaAe0f9Db608bbf0bDB4cfdf0DDF",
     deployBlock: 398072018n,
   },
 };
