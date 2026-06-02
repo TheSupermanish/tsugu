@@ -148,6 +148,10 @@ contract Vault is AgentCompute {
     /// @notice Upper bound on evidence checks per pact — caps the quorum-tally loop.
     uint8 public constant MAX_CHECKS = 8;
 
+    /// @notice Upper bound on a pact's dispute window. Bounds the release timelock and
+    ///         keeps confirmedAt + disputeWindow well inside uint64 (no truncation).
+    uint64 public constant MAX_DISPUTE_WINDOW = 30 days;
+
     Pact[] internal pacts;
 
     /// @notice Sum of in-vault native escrow (non-yield pacts). The owner can never
@@ -163,6 +167,19 @@ contract Vault is AgentCompute {
 
     /// @notice pactId → contributor → wei contributed (the refundable ledger).
     mapping(uint256 => mapping(address => uint256)) public contributions;
+
+    /// @notice pactId → contributor → yield-strategy shares minted for that contributor
+    ///         (yield pacts only). Refund redeems each contributor's EXACT shares so
+    ///         yield that accrued between contributions is split by share, not by a
+    ///         principal fraction (which would mis-pay co-contributors).
+    mapping(uint256 => mapping(address => uint256)) public contributionShares;
+
+    /// @notice Pull-payment ledger: native owed to a beneficiary whose push failed on
+    ///         release (e.g. a contract that rejects value). Withdrawn via {claim} — so
+    ///         a reverting beneficiary can never permanently brick a Confirmed pact.
+    mapping(address => uint256) public claimable;
+    /// @notice Sum of `claimable`, ring-fenced from owner withdrawal alongside escrow.
+    uint256 public totalPending;
 
     /// @notice requestId → pactId and → check index, set when a check is dispatched so
     ///         the platform callback (`_onResult`) knows which check a verdict belongs to.
@@ -192,6 +209,8 @@ contract Vault is AgentCompute {
     event PactRefunded(uint256 indexed pactId, address indexed contributor, uint256 amount);
     event PactExpired(uint256 indexed pactId);
     event YieldStrategySet(address indexed strategy);
+    event PactReleasePending(uint256 indexed pactId, address indexed beneficiary, uint256 amount);
+    event Claimed(address indexed who, uint256 amount);
 
     error BadBeneficiary();
     error BadDeadline();
@@ -215,11 +234,14 @@ contract Vault is AgentCompute {
     error NotRefundable(PactStatus status);
     error NothingToRefund();
     error NotExpirable();
-    error ReleaseFailed();
     error RefundFailedTo(address to);
     error EscrowLocked(uint256 requested, uint256 free);
     error YieldUnavailable();
     error YieldStrategyLocked();
+    error ZeroShares();
+    error BadDisputeWindow();
+    error NothingToClaim();
+    error ClaimFailed();
 
     /// @param platform_         Somnia Agents platform (createRequest/handleResponse).
     /// @param parseAgentId_     parse-website agent id (0 → canonical PARSE_WEBSITE).
@@ -264,6 +286,7 @@ contract Vault is AgentCompute {
         if (k == 0) revert NoChecks();
         if (k > MAX_CHECKS) revert TooManyChecks(k, MAX_CHECKS);
         if (n.quorum == 0 || n.quorum > k) revert BadQuorum(n.quorum, k);
+        if (n.disputeWindow > MAX_DISPUTE_WINDOW) revert BadDisputeWindow();
         if (n.earnYield && address(yieldStrategy) == address(0)) revert YieldUnavailable();
 
         pactId = pacts.length;
@@ -314,8 +337,10 @@ contract Vault is AgentCompute {
         p.escrow += amount;
         if (p.yieldOn) {
             uint256 s = yieldStrategy.deposit{value: amount}();
+            if (s == 0) revert ZeroShares(); // never record principal backed by zero shares
             p.shares += s;
             outstandingShares += s;
+            contributionShares[pactId][msg.sender] += s;
         } else {
             totalEscrow += amount;
         }
@@ -356,13 +381,13 @@ contract Vault is AgentCompute {
     }
 
     /// @dev Encode the right payload for a check's claim type and dispatch it.
-    function _dispatchCheck(string storage claim, Check storage c) private returns (uint256 requestId) {
+    function _dispatchCheck(string storage claimText, Check storage c) private returns (uint256 requestId) {
         if (c.claimType == ClaimType.Web) {
             bytes memory payload = SomniaAI.encodeExtractString(
                 "verdict",
                 "whether the claim is confirmed or denied by the evidence on this page",
                 _verdictOptions(),
-                claim,
+                claimText,
                 c.source,
                 c.resolveUrl,
                 c.resolveUrl ? uint8(3) : uint8(1),
@@ -374,7 +399,7 @@ contract Vault is AgentCompute {
             requestId = _dispatch(jsonAgentId, payload);
         } else {
             string memory prompt = string.concat(
-                "Claim to verify: ", claim, "\n\nEvidence:\n", c.source, "\n\nIs the claim supported by the evidence?"
+                "Claim to verify: ", claimText, "\n\nEvidence:\n", c.source, "\n\nIs the claim supported by the evidence?"
             );
             bytes memory payload = SomniaAI.encodeInferString(
                 prompt,
@@ -466,29 +491,39 @@ contract Vault is AgentCompute {
     function release(uint256 pactId) external nonReentrant {
         Pact storage p = _pact(pactId);
         if (p.status != PactStatus.Confirmed) revert NotConfirmed(p.status);
-        uint64 releasableTs = uint64(uint256(p.confirmedAt) + uint256(p.disputeWindow));
-        if (block.timestamp < releasableTs) revert DisputeWindowActive(releasableTs);
-
+        // Gate computed in uint256 (disputeWindow is bounded, so this also fits uint64).
+        uint256 releasableTs = uint256(p.confirmedAt) + uint256(p.disputeWindow);
+        if (block.timestamp < releasableTs) revert DisputeWindowActive(uint64(releasableTs));
         if (p.escrow == 0) revert EmptyEscrow();
+
         address beneficiary = p.beneficiary;
         p.status = PactStatus.Released;
 
-        uint256 paid;
+        // Bring the payout into the vault: redeem yield shares here; non-yield escrow
+        // is already held here.
+        uint256 amount;
         if (p.yieldOn) {
-            // Redeem the pact's strategy shares straight to the beneficiary: principal + yield.
             uint256 sh = p.shares;
             p.shares = 0;
             p.escrow = 0;
             outstandingShares -= sh;
-            paid = yieldStrategy.redeem(sh, beneficiary);
+            amount = yieldStrategy.redeem(sh, address(this)); // principal + yield → this vault
         } else {
-            paid = p.escrow;
+            amount = p.escrow;
             p.escrow = 0;
-            totalEscrow -= paid;
-            (bool ok,) = beneficiary.call{value: paid}("");
-            if (!ok) revert ReleaseFailed();
+            totalEscrow -= amount;
         }
-        emit PactReleased(pactId, beneficiary, paid);
+
+        // Push to the beneficiary; if they reject value, hold it as a claimable credit
+        // (pull fallback) so a reverting beneficiary can never permanently lock escrow.
+        (bool ok,) = beneficiary.call{value: amount}("");
+        if (ok) {
+            emit PactReleased(pactId, beneficiary, amount);
+        } else {
+            claimable[beneficiary] += amount;
+            totalPending += amount;
+            emit PactReleasePending(pactId, beneficiary, amount);
+        }
     }
 
     /// @notice Refund the caller's contribution from a Denied or Expired pact. Each
@@ -503,8 +538,11 @@ contract Vault is AgentCompute {
 
         uint256 paid;
         if (p.yieldOn) {
-            // Redeem this contributor's pro-rata shares: their principal + their share of yield.
-            uint256 sh = (p.shares * principal) / p.escrow;
+            // Redeem this contributor's EXACT shares (recorded at deposit time): their
+            // principal + the yield those specific shares earned. Splitting by principal
+            // fraction would mis-pay co-contributors when yield accrued between deposits.
+            uint256 sh = contributionShares[pactId][msg.sender];
+            contributionShares[pactId][msg.sender] = 0;
             p.shares -= sh;
             p.escrow -= principal;
             outstandingShares -= sh;
@@ -517,6 +555,19 @@ contract Vault is AgentCompute {
             if (!ok) revert RefundFailedTo(msg.sender);
         }
         emit PactRefunded(pactId, msg.sender, paid);
+    }
+
+    /// @notice Withdraw a payout that couldn't be pushed to you on {release} (pull
+    ///         pattern). Lets a beneficiary recover funds even if their address rejected
+    ///         the direct transfer. CEI + nonReentrant.
+    function claim() external nonReentrant {
+        uint256 amount = claimable[msg.sender];
+        if (amount == 0) revert NothingToClaim();
+        claimable[msg.sender] = 0;
+        totalPending -= amount;
+        (bool ok,) = msg.sender.call{value: amount}("");
+        if (!ok) revert ClaimFailed();
+        emit Claimed(msg.sender, amount);
     }
 
     /// @notice Mark an undecided pact Expired once its deadline has passed, unlocking
@@ -534,8 +585,9 @@ contract Vault is AgentCompute {
     /// @notice Free balance the owner may withdraw: total balance minus ring-fenced
     ///         escrow. This is rebate dust / owner top-ups — never contributor money.
     function freeBalance() public view returns (uint256) {
+        uint256 locked = totalEscrow + totalPending;
         uint256 bal = address(this).balance;
-        return bal > totalEscrow ? bal - totalEscrow : 0;
+        return bal > locked ? bal - locked : 0;
     }
 
     /// @inheritdoc AgentCompute

@@ -570,6 +570,42 @@ contract VaultTest is Test {
         assertEq(vault.totalEscrow(), 0);
     }
 
+    function test_createPact_revertsBadDisputeWindow() public {
+        Vault.NewPact memory n = _pact(_checks(_web("a")), 1, uint64(31 days)); // > MAX_DISPUTE_WINDOW
+        vm.prank(creator);
+        vm.expectRevert(Vault.BadDisputeWindow.selector);
+        vault.createPact(n);
+    }
+
+    // --- regression: a reverting beneficiary cannot brick a Confirmed pact ----
+
+    function test_release_revertingBeneficiary_heldClaimable_thenClaimed() public {
+        RejectEther rej = new RejectEther();
+        Vault.NewPact memory n = _pact(_checks(_web("a")), 1, 0);
+        n.beneficiary = address(rej);
+        vm.prank(creator);
+        uint256 id = vault.createPact(n);
+        vm.prank(alice);
+        vault.contribute{value: 4 ether}(id);
+        vm.prank(creator);
+        uint256 rid = vault.requestResolution{value: deposit()}(id, 0);
+        platform.fireString(address(vault), rid, "confirmed");
+
+        // Beneficiary rejects the push — release must NOT revert; funds are held claimable.
+        vault.release(id);
+        assertEq(uint8(_status(id)), uint8(Vault.PactStatus.Released));
+        assertEq(vault.claimable(address(rej)), 4 ether);
+        assertEq(vault.totalPending(), 4 ether);
+        assertEq(address(vault).balance, 4 ether); // still here, ring-fenced
+        assertEq(vault.freeBalance(), 0); // owner can't sweep pending payouts
+
+        // Once the beneficiary can receive, it pulls the funds.
+        rej.setAccept(true);
+        rej.claimFrom(vault);
+        assertEq(address(rej).balance, 4 ether);
+        assertEq(vault.totalPending(), 0);
+    }
+
     function test_requiredDeposit() public view {
         assertEq(vault.requiredDeposit(), platform.FLOOR() + REWARD * SUB);
     }
@@ -613,5 +649,22 @@ contract Reentrant {
             armed = false;
             try vault.refund(armedPact) {} catch {}
         }
+    }
+}
+
+/// @dev Beneficiary that rejects ETH until toggled — to exercise the release pull-fallback.
+contract RejectEther {
+    bool public accept;
+
+    function setAccept(bool a) external {
+        accept = a;
+    }
+
+    function claimFrom(Vault v) external {
+        v.claim();
+    }
+
+    receive() external payable {
+        require(accept, "reject");
     }
 }

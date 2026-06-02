@@ -80,7 +80,8 @@ contract VaultYieldTest is Test {
         uint256 id = vault.createPact{value: 10 ether}(_yieldPact(1));
 
         _accrue(2 ether); // +20% yield in the reserve
-        assertEq(vault.yieldValue(id), 12 ether);
+        // ~12 ether (virtual-share offset rounds sub-wei in the vault's favour for solvency)
+        assertApproxEqAbs(vault.yieldValue(id), 12 ether, 10);
 
         vm.prank(bob);
         uint256 rid = vault.requestResolution{value: deposit()}(id, 0);
@@ -89,7 +90,7 @@ contract VaultYieldTest is Test {
 
         uint256 b0 = beneficiary.balance;
         vault.release(id);
-        assertEq(beneficiary.balance, b0 + 12 ether); // principal + yield
+        assertApproxEqAbs(beneficiary.balance, b0 + 12 ether, 10); // principal + yield
         assertEq(vault.outstandingShares(), 0);
         assertEq(uint8(vault.getPact(id).status), uint8(Vault.PactStatus.Released));
     }
@@ -154,6 +155,60 @@ contract VaultYieldTest is Test {
         vm.prank(alice);
         vm.expectRevert(DemoYieldStrategy.NotVault.selector);
         strat.redeem(1, alice);
+    }
+
+    // --- regression: the ERC-4626 inflation/donation attack is closed ---------
+
+    function test_inflationDonationLever_closed() public {
+        // Attacker opens a 1-wei yield pact (mints shares) — allowed.
+        vm.prank(bob);
+        vault.createPact{value: 1}(_yieldPact(1));
+        // ...but CANNOT inflate the share price: fund() is operator-only,
+        vm.prank(bob);
+        vm.expectRevert(DemoYieldStrategy.NotOperator.selector);
+        strat.fund{value: 3 ether}();
+        // ...and there is no open receive(), so a raw donation is rejected.
+        vm.prank(bob);
+        (bool ok,) = address(strat).call{value: 3 ether}("");
+        assertFalse(ok);
+        // Therefore a victim's contribution to a different yield pact still mints real
+        // shares and keeps its full value — no stranding.
+        vm.prank(creator);
+        uint256 vid = vault.createPact(_yieldPact(1));
+        vm.prank(alice);
+        vault.contribute{value: 2 ether}(vid);
+        assertGt(vault.contributionShares(vid, alice), 0);
+        assertApproxEqAbs(vault.yieldValue(vid), 2 ether, 10);
+    }
+
+    // --- regression: refund splits yield by SHARES, not principal fraction -----
+
+    function test_refund_yieldSplitByShares_notPrincipal() public {
+        vm.prank(creator);
+        uint256 id = vault.createPact(_yieldPact(1));
+        vm.prank(alice);
+        vault.contribute{value: 10 ether}(id); // at par
+        _accrue(10 ether); // price doubles BETWEEN the two contributions
+        vm.prank(bob);
+        vault.contribute{value: 10 ether}(id); // fewer shares (post-accrual)
+
+        vm.prank(creator);
+        uint256 rid = vault.requestResolution{value: deposit()}(id, 0);
+        platform.fireString(address(vault), rid, "denied");
+
+        // Alice was present through the accrual -> ~20; Bob arrived after -> ~10.
+        // (The buggy principal-fraction split would have paid each 15.)
+        uint256 a0 = alice.balance;
+        vm.prank(alice);
+        vault.refund(id);
+        assertApproxEqAbs(alice.balance, a0 + 20 ether, 1e9);
+
+        uint256 b0 = bob.balance;
+        vm.prank(bob);
+        vault.refund(id);
+        assertApproxEqAbs(bob.balance, b0 + 10 ether, 1e9);
+
+        assertEq(vault.outstandingShares(), 0);
     }
 
     receive() external payable {}
