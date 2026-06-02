@@ -7,9 +7,9 @@ export const vaultAbi = [{"type":"constructor","inputs":[{"name":"platform_","ty
 /** Tsugu deployments by chain id (Shannon 50312). */
 export const vaultDeployments: Record<number, { vault: Address; strategy: Address; deployBlock: bigint }> = {
   50312: {
-    vault: "0xCd6e77365d19405de37FB4962D729DD9FB3dfd6b",
-    strategy: "0xb4295a4295d7Cc0171F84fF1DA44fc283e2b08cc",
-    deployBlock: 398695000n,
+    vault: "0x5F7CF1e3206140CB73e5365E287AE8D1d7B770dC",
+    strategy: "0xFFFF7c37D382e17B88A4F92c363dE6511E9bDfEF",
+    deployBlock: 398698000n,
   },
 };
 
