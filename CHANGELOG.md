@@ -1,13 +1,30 @@
 # Changelog
 
-All notable changes to asom are documented here. Packages are versioned in lockstep.
+All notable changes to Tsugu are documented here. Packages are versioned in lockstep.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
-The fundamental AI layer + a write-capable console.
+**Tsugu** — the pivot to *money that moves on proof, not promises*: an AI-verified conditional
+escrow, built on the fundamental AI layer below.
 
-### Added
+### Added — Tsugu
+
+- **`Vault is AgentCompute`** (`src/tsugu/Vault.sol`) — a permissionless registry of **Pacts**
+  (AI-verified conditional escrows). Multi-source **M-of-N quorum**: a pact confirms only when M
+  independent checks agree, denies once quorum is unreachable. Three `ClaimType`s use all three
+  Somnia agents (Web→parse, Data→JSON, Text→LLM). `release` (no skim) / `refund` / `markExpired`;
+  escrow ring-fenced (`totalEscrow`), CEI + `nonReentrant`, **pull-payment** release; deadline →
+  permissionless refund (funds never lock).
+- **Opt-in yield** behind a pluggable `IYieldStrategy` (off by default; `DemoYieldStrategy` is the
+  testnet stand-in). Release pays principal + yield; refund pays principal + pro-rata yield.
+- **Security review** (multi-agent adversarial + Slither): 13 findings incl. a critical ERC-4626
+  inflation attack on the yield strategy — all fixed with regression tests. Suite: **182**.
+- **Web** rebuilt as Tsugu (kintsugi gold-seam): home gallery, create (multi-source + quorum +
+  yield toggle), pact detail (live verdict + per-source consensus receipts + fund/verify/release/
+  refund). `script/DeployVault.s.sol`; SDK exports the Vault ABI/address/enums.
+
+### Added — fundamental AI layer
 
 - **Contracts — `AgentCompute` (abstract base)** distilling `OracleAgent`'s hardened
   Somnia-Agents pattern (deposit math, the four callback guards, overpayment refund,
