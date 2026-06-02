@@ -98,6 +98,7 @@ export default function PactPage({ params }: { params: { id: string } }) {
   const inWindow = pact.status === 2 && now < releasableTs;
   const canRefund = (pact.status === 3 || pact.status === 5) && mine > 0n;
   const canExpire = active && now > Number(pact.deadline);
+  const releaseAmt = pact.yieldOn ? ((yieldQ.data as bigint | undefined) ?? pact.escrow) : pact.escrow;
 
   const send = (functionName: string, args: unknown[], opts: { value?: bigint; gas: bigint }, label: string) => {
     setAction(label);
@@ -218,7 +219,9 @@ export default function PactPage({ params }: { params: { id: string } }) {
                 </p>
               ) : (
                 <button className="btn-gold mt-4" disabled={busy || !canRelease} onClick={() => send("release", [id], { gas: GAS.settle }, "release")}>
-                  {action === "release" && busy ? "Releasing…" : `Release ${fmtStt(pact.escrow)} STT to beneficiary`}
+                  {action === "release" && busy
+                    ? "Releasing…"
+                    : `Release ${fmtStt(releaseAmt)} STT to beneficiary${pact.yieldOn ? " (principal + yield)" : ""}`}
                 </button>
               )}
             </>
