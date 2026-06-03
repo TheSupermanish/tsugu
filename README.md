@@ -84,7 +84,7 @@ permissionless refund). See [`SECURITY.md`](./SECURITY.md).
 ## Stack
 
 - **Contracts:** Solidity 0.8.24 (Foundry), OpenZeppelin 5.0.2 — `Vault is AgentCompute`
-- **SDK / CLI:** TypeScript + viem ([`@tsugu/sdk`](./packages/sdk), [`@tsugu/cli`](./packages/cli))
+- **SDK:** TypeScript + viem ([`@tsugu/sdk`](./packages/sdk)) — Vault ABI/address/enums + Somnia AI constants
 - **Web:** Next.js app (`apps/web`) — kintsugi gold-seam UI, self-custodial (you sign every write)
 - **Monorepo:** pnpm workspaces + Turborepo
 - **Chain:** Somnia Shannon testnet (50312)
@@ -94,7 +94,7 @@ permissionless refund). See [`SECURITY.md`](./SECURITY.md).
 ```bash
 pnpm install
 
-# contracts — 182 tests (lifecycle, all 3 agents, quorum, escrow ring-fence, reentrancy, yield)
+# contracts — 114 tests (lifecycle, all 3 agents, quorum, escrow ring-fence, reentrancy, yield)
 pnpm contracts:test
 cp packages/contracts/.env.example packages/contracts/.env   # add PRIVATE_KEY
 
